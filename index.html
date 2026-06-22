@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ヤニブ</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #1a6b3c; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; user-select: none; }
+h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+.scores { font-size: 0.8em; margin-bottom: 4px; background: rgba(0,0,0,.25); padding: 3px 14px; border-radius: 8px; }
+.info { font-size: 0.9em; margin-bottom: 6px; min-height: 1.2em; background: rgba(0,0,0,.3); padding: 4px 16px; border-radius: 8px; }
+
+.table {
+  display: grid; width: 100%; max-width: 1000px; flex: 1; gap: 6px;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "top top top"
+    "left center right"
+    "bottom bottom bottom";
+  align-items: center; justify-items: center;
+}
+.seat-0 { grid-area: bottom; }
+.seat-1 { grid-area: left; }
+.seat-2 { grid-area: top; }
+.seat-3 { grid-area: right; }
+.center { grid-area: center; }
+
+.seat { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border-radius: 10px; transition: background 0.2s; }
+.seat.active { background: rgba(255,215,0,.12); box-shadow: 0 0 0 2px rgba(255,215,0,.5); }
+.seat-label { font-size: 0.8em; opacity: 0.85; white-space: nowrap; }
+.seat.active .seat-label { color: #ffd700; opacity: 1; text-shadow: 0 0 6px rgba(255,215,0,.8); }
+
+.hand { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; min-height: 90px; }
+
+.opp-hand { display: flex; }
+.seat-2 .opp-hand { flex-direction: row; }
+.seat-1 .opp-hand, .seat-3 .opp-hand { flex-direction: column; }
+.opp-hand .card-back { width: 40px; height: 56px; }
+.opp-hand .card-back::after { font-size: 1.3em; }
+.seat-2 .opp-hand .card-back { margin-left: -16px; }
+.seat-2 .opp-hand .card-back:first-child { margin-left: 0; }
+.seat-1 .opp-hand .card-back, .seat-3 .opp-hand .card-back { margin-top: -34px; }
+.seat-1 .opp-hand .card-back:first-child, .seat-3 .opp-hand .card-back:first-child { margin-top: 0; }
+
+.card {
+  width: 60px; height: 84px; border-radius: 6px; background: #fff; color: #333;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-size: 0.85em; font-weight: bold; cursor: pointer; border: 2px solid transparent;
+  box-shadow: 1px 2px 4px rgba(0,0,0,.3); transition: transform 0.15s, border-color 0.15s;
+  position: relative; flex-shrink: 0;
+}
+.card:hover { transform: translateY(-4px); }
+.card.selected { border-color: #ffd700; transform: translateY(-8px); box-shadow: 0 0 10px rgba(255,215,0,.6); }
+.card.red { color: #c00; }
+.card.black { color: #222; }
+.card.joker { color: #8b00c8; }
+.card-back { background: linear-gradient(135deg, #1a3a8a, #2855b8); color: transparent; cursor: default; }
+.card-back::after { content: '🂠'; font-size: 2em; color: rgba(255,255,255,.3); }
+.card-back:hover { transform: none; }
+.card .rank { font-size: 1.1em; }
+.card .suit { font-size: 1.3em; }
+
+.middle-area { display: flex; align-items: center; gap: 20px; }
+.pile { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.pile-label { font-size: 0.75em; opacity: 0.7; }
+.draw-pile .card { cursor: pointer; }
+.draw-pile .card:hover { transform: translateY(-3px); }
+
+.discard-pile-cards { position: relative; display: inline-flex; align-items: center; min-width: 60px; min-height: 84px; border-radius: 8px; padding: 4px; }
+.discard-pile-cards.playable { cursor: pointer; box-shadow: 0 0 0 2px #ffd700, 0 0 14px rgba(255,215,0,.6); }
+.card-group { display: flex; gap: 4px; }
+.played-group { position: absolute; top: 0; left: 0; transform: translateX(26px); transition: transform 0.6s ease; z-index: 2; filter: drop-shadow(-4px 2px 4px rgba(0,0,0,.5)); }
+.flying { position: fixed; z-index: 200; margin: 0; transition-property: left, top; transition-timing-function: cubic-bezier(.35,.05,.25,1); pointer-events: none; box-shadow: 0 8px 20px rgba(0,0,0,.55); }
+.discard-pile-cards .card { cursor: default; }
+.discard-pile-cards .card.pickable { cursor: pointer; border-color: #4fc3f7; animation: pulse 1.1s infinite; }
+.discard-pile-cards .card.pickable:hover { transform: translateY(-4px); }
+/* 補充フェーズ中は上に重なる「出したカード」を半透明にして下のカードを見せる。
+   クリックは透過させ、下の元カードに重なった部分だけ取得できるようにする */
+.played-group.glow { opacity: 0.5; pointer-events: none; }
+.draw-pile .card.drawable { animation: pulse 1.1s infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 2px rgba(79,195,247,.2); } 50% { box-shadow: 0 0 14px rgba(79,195,247,.85); } }
+
+.actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; justify-content: center; }
+button { padding: 8px 18px; border: none; border-radius: 6px; font-size: 0.9em; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-yaniv { background: #ff9800; color: #fff; }
+.btn-yaniv:hover:not(:disabled) { background: #e68900; }
+.btn-new { background: #2196f3; color: #fff; }
+.btn-new:hover { background: #1769aa; }
+.choice-btn { background: #455a64; color: #fff; }
+.choice-btn:hover { background: #37474f; }
+.choice-btn.selected-choice { background: #ffd700; color: #222; box-shadow: 0 0 10px rgba(255,215,0,.6); }
+
+.modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal-content { background: #2c2c2c; padding: 20px 28px; border-radius: 12px; text-align: center; max-width: 560px; max-height: 90vh; overflow-y: auto; }
+.modal-content h2 { margin-bottom: 10px; }
+.modal-content p { margin: 4px 0; font-size: 0.9em; }
+.modal-content .result-detail { margin: 10px 0; padding: 8px; background: rgba(255,255,255,.1); border-radius: 8px; }
+.modal-content button { margin-top: 14px; }
+.revealed-hand { display: flex; gap: 3px; justify-content: center; margin: 4px 0 10px; flex-wrap: wrap; }
+.revealed-hand .card { width: 40px; height: 56px; font-size: 0.6em; cursor: default; }
+.revealed-hand .card:hover { transform: none; }
+</style>
+</head>
+<body>
+
+<h1>ヤニブ</h1>
+<div class="scores" id="scores"></div>
+<div class="info" id="info">ゲームを開始します...</div>
+
+<div class="table">
+  <div class="seat seat-2" id="seat-2">
+    <div class="seat-label" id="label-2"></div>
+    <div class="opp-hand" id="hand-2"></div>
+  </div>
+
+  <div class="seat seat-1" id="seat-1">
+    <div class="seat-label" id="label-1"></div>
+    <div class="opp-hand" id="hand-1"></div>
+  </div>
+
+  <div class="center">
+    <div class="middle-area">
+      <div class="pile draw-pile">
+        <div class="pile-label">山札</div>
+        <div class="card card-back" id="draw-pile" onclick="drawFromPile()"></div>
+      </div>
+      <div class="pile">
+        <div class="pile-label">捨札</div>
+        <div class="discard-pile-cards" id="discard-pile" onclick="discardAreaClick()"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="seat seat-3" id="seat-3">
+    <div class="seat-label" id="label-3"></div>
+    <div class="opp-hand" id="hand-3"></div>
+  </div>
+
+  <div class="seat seat-0" id="seat-0">
+    <div class="seat-label" id="label-0"></div>
+    <div class="hand" id="player-hand"></div>
+    <div class="actions">
+      <button class="btn-yaniv" id="btn-yaniv" onclick="declareYaniv()" disabled>ヤニブ宣言</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal" style="display:none">
+  <div class="modal-content" id="modal-content"></div>
+</div>
+
+<script>
+const SUITS = ['♠','♥','♦','♣'];
+const SUIT_COLORS = {'♠':'black','♣':'black','♥':'red','♦':'red'};
+const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const RANK_VALUES = {A:1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,J:11,Q:12,K:13};
+
+// 席の位置: 0=下(あなた), 1=左, 2=上, 3=右
+const SEAT_NAMES = ['あなた', 'CPU左', 'CPU上', 'CPU右'];
+// グラフ用の各プレイヤーの色
+const PLAYER_COLORS = ['#ffd700', '#4fc3f7', '#ff8a65', '#81c784'];
+let scoreHistory = [[0, 0, 0, 0]]; // 各セット終了時点の累計スコア。index0=開始時(0点)
+// CPU人数ごとの席割り（プレイヤーindex 1.. を時計回りに配置）
+//  下→左→上→右 の時計回り順で席を割り当てる
+const CPU_SEAT_LAYOUT = { 1: [2], 2: [1, 3], 3: [1, 2, 3] };
+
+let NUM_PLAYERS = 4;
+let currentNumCpus = 3;
+let seatOf = [0, 1, 2, 3]; // プレイヤーindex -> 席位置
+let NAMES = ['あなた', 'CPU左', 'CPU上', 'CPU右'];
+
+let deck;
+let hands;        // 各プレイヤーの手札 hands[0..3]
+let discard;      // 取得可能な捨札の山（直前にプレイされたカード）
+let justPlayed;   // あなたが出したばかりのカード（補充前。山の右上に重ねて表示）
+let turn;         // 現在の手番 0..3
+let phase;        // 'play' | 'draw' | 'cpu' | 'over'
+let busy = false; // スライド演出中の二重操作防止
+let selectedIndices = new Set();
+let scores = [0, 0, 0, 0];
+
+function createDeck() {
+  const d = [];
+  for (const s of SUITS) for (const r of RANKS) d.push({suit:s, rank:r, isJoker:false});
+  d.push({suit:'★', rank:'JK', isJoker:true});
+  d.push({suit:'★', rank:'JK', isJoker:true});
+  return d;
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function cardValue(c) { return c.isJoker ? 0 : RANK_VALUES[c.rank]; }
+function handTotal(hand) { return hand.reduce((s, c) => s + cardValue(c), 0); }
+
+// A,2-10,J,Q,K,ジョーカー の順に並べ替える
+function sortOrder(c) { return c.isJoker ? 100 : RANK_VALUES[c.rank]; }
+function sortHand(hand) {
+  hand.sort((a, b) => {
+    const d = sortOrder(a) - sortOrder(b);
+    if (d !== 0) return d;
+    return SUITS.indexOf(a.suit) - SUITS.indexOf(b.suit);
+  });
+}
+
+function rankIndex(c) { return c.isJoker ? -1 : RANKS.indexOf(c.rank); }
+
+function cardFaceHTML(c, extraClass, attrs) {
+  const cls = c.isJoker ? 'joker' : SUIT_COLORS[c.suit];
+  return `<div class="card ${cls} ${extraClass || ''}" ${attrs || ''}><span class="rank">${c.rank}</span><span class="suit">${c.isJoker ? '★' : c.suit}</span></div>`;
+}
+function renderCard(c) { return cardFaceHTML(c); }
+
+// カードが from(矩形) から to(矩形) へ飛ぶ演出。Promiseで完了を返す
+// faceDown=true なら裏向きで飛ばす（中身を見せない）
+function flyCard(from, to, card, duration, faceDown) {
+  return new Promise(resolve => {
+    const el = document.createElement('div');
+    if (faceDown) {
+      el.className = 'card card-back flying';
+    } else {
+      const cls = card.isJoker ? 'joker' : SUIT_COLORS[card.suit];
+      el.className = `card ${cls} flying`;
+      el.innerHTML = `<span class="rank">${card.rank}</span><span class="suit">${card.isJoker ? '★' : card.suit}</span>`;
+    }
+    el.style.left = from.left + 'px';
+    el.style.top = from.top + 'px';
+    el.style.transitionDuration = duration + 'ms';
+    document.body.appendChild(el);
+    el.getBoundingClientRect(); // reflow
+    el.style.left = to.left + 'px';
+    el.style.top = to.top + 'px';
+    setTimeout(() => { el.remove(); resolve(); }, duration);
+  });
+}
+
+const FLY_MS = 650;   // 飛ぶ演出の時間
+const SLIDE_MS = 600; // 出したカードが捨札に収まる時間
+
+function render() {
+  // 使わない相手席を隠す
+  for (const s of [1, 2, 3]) document.getElementById('seat-' + s).style.display = 'none';
+
+  // 相手プレイヤーを各席に配置
+  for (let i = 1; i < NUM_PLAYERS; i++) {
+    const s = seatOf[i];
+    document.getElementById('seat-' + s).style.display = 'flex';
+    document.getElementById('label-' + s).textContent = `${NAMES[i]} (${hands[i].length}枚)`;
+    document.getElementById('hand-' + s).innerHTML = hands[i].map(() => '<div class="card card-back"></div>').join('');
+  }
+
+  // あなた（席0・下）
+  const plEl = document.getElementById('player-hand');
+  plEl.innerHTML = hands[0].map((c, i) => {
+    const sel = selectedIndices.has(i) ? 'selected' : '';
+    return cardFaceHTML(c, sel, `onclick="toggleSelect(${i})"`);
+  }).join('');
+  document.getElementById('label-0').textContent = `あなた (${hands[0].length}枚 / 合計: ${handTotal(hands[0])}点)`;
+
+  // 手番のハイライト
+  for (let s = 0; s < 4; s++) {
+    document.getElementById('seat-' + s).classList.toggle('active', s === seatOf[turn] && phase !== 'over');
+  }
+
+  // 捨札
+  const discEl = document.getElementById('discard-pile');
+  let discHTML = '';
+  const canPick = phase === 'draw';
+  if (discard && discard.length > 0) {
+    discHTML += `<div class="card-group prev-group">` +
+      discard.map((c, i) => {
+        const pickable = (canPick && (discard.length < 3 || i === 0 || i === discard.length - 1)) ? 'pickable' : '';
+        return cardFaceHTML(c, pickable, pickable ? `onclick="drawFromDiscard(${i})"` : '');
+      }).join('') + '</div>';
+  }
+  if (justPlayed && justPlayed.length > 0) {
+    const glow = canPick ? ' glow' : '';
+    discHTML += `<div class="card-group played-group${glow}" id="played-group">` +
+      justPlayed.map(c => cardFaceHTML(c, '')).join('') + '</div>';
+  }
+  if (!discHTML) discHTML = '<div style="width:60px;height:84px;border:2px dashed rgba(255,255,255,.3);border-radius:6px;"></div>';
+  discEl.innerHTML = discHTML;
+  document.getElementById('draw-pile').classList.toggle('drawable', phase === 'draw');
+
+  // ボタン・強調
+  document.getElementById('btn-yaniv').disabled = phase !== 'play' || handTotal(hands[0]) > 5;
+  discEl.classList.toggle('playable', phase === 'play' && selectedIndices.size > 0);
+
+  // スコア
+  const roundLabel = `[ラウンド ${Math.min(roundsPlayed + 1, targetSets)}/${targetSets}] `;
+  document.getElementById('scores').textContent = roundLabel + '累計スコア — ' + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ');
+}
+
+function toggleSelect(i) {
+  if (phase !== 'play') return;
+  if (selectedIndices.has(i)) selectedIndices.delete(i);
+  else selectedIndices.add(i);
+  render();
+}
+
+function validatePlay(cards) {
+  if (cards.length === 0) return false;
+  if (cards.length === 1) return true;
+
+  const nonJokers = cards.filter(c => !c.isJoker);
+  const jokerCount = cards.length - nonJokers.length;
+
+  // 同じランク
+  if (nonJokers.length >= 2) {
+    const allSameRank = nonJokers.every(c => c.rank === nonJokers[0].rank);
+    if (allSameRank && jokerCount === 0) return true;
+  }
+
+  // 同じマークの連番（3枚以上、ジョーカーで穴埋め可）
+  if (cards.length >= 3) {
+    const suits = nonJokers.map(c => c.suit);
+    const uniqueSuits = [...new Set(suits)];
+    if (uniqueSuits.length === 1) {
+      const indices = nonJokers.map(c => rankIndex(c)).sort((a, b) => a - b);
+      const minIdx = indices[0];
+      const maxIdx = indices[indices.length - 1];
+      if (maxIdx - minIdx + 1 === cards.length) {
+        const filled = new Set(indices);
+        let jokersNeeded = 0;
+        for (let k = minIdx; k <= maxIdx; k++) if (!filled.has(k)) jokersNeeded++;
+        if (jokersNeeded <= jokerCount) return true;
+      }
+      if (jokerCount > 0) {
+        const totalSpan = indices.length + jokerCount;
+        for (let start = Math.max(0, indices[0] - jokerCount); start <= indices[0]; start++) {
+          const filled = new Set(indices);
+          let jLeft = jokerCount, ok = true;
+          for (let k = start; k < start + totalSpan; k++) {
+            if (k < 0 || k > 12) { ok = false; break; }
+            if (!filled.has(k)) { jLeft--; if (jLeft < 0) { ok = false; break; } }
+          }
+          if (ok) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// 捨札エリアのクリック：プレイ中なら選択カードを出す
+function discardAreaClick() {
+  if (phase === 'play') playCards();
+}
+
+function playCards() {
+  if (phase !== 'play' || turn !== 0 || busy) return;
+  const indices = [...selectedIndices].sort((a, b) => a - b);
+  if (indices.length === 0) { setInfo('カードを選択してください'); return; }
+  const cards = indices.map(i => hands[0][i]);
+  if (!validatePlay(cards)) { setInfo('無効な組み合わせです'); return; }
+
+  // 手札のカードの現在位置を取得（飛ばす出発点）
+  const handEls = document.querySelectorAll('#player-hand .card');
+  const sourceRects = indices.map(i => handEls[i].getBoundingClientRect());
+
+  justPlayed = cards;
+  hands[0] = hands[0].filter((_, i) => !selectedIndices.has(i));
+  selectedIndices.clear();
+  phase = 'draw';
+  busy = true;
+  setInfo('カードを出しています...');
+  render();
+
+  // 出したカードを一旦隠し、手札の位置から捨札へ飛ばす
+  const pg = document.getElementById('played-group');
+  const destEls = pg ? [...pg.children] : [];
+  if (pg) pg.style.visibility = 'hidden';
+  let pending = cards.length;
+  cards.forEach((c, k) => {
+    const dest = destEls[k].getBoundingClientRect();
+    flyCard(sourceRects[k], dest, c, FLY_MS).then(() => {
+      if (--pending === 0) {
+        if (pg) pg.style.visibility = 'visible';
+        busy = false;
+        setInfo('山札か、捨札（1つ下の山）から1枚引いてください');
+      }
+    });
+  });
+}
+
+// 補充完了後、出したカードを新しい捨札の山にして次の手番へ
+function finishDraw() {
+  discard = justPlayed;
+  justPlayed = null;
+  busy = false;
+  sortHand(hands[0]);
+  advanceTurn();
+}
+
+// 出したカードを捨札の位置へゆっくりスライドさせて確定
+function slideAndFinish() {
+  const pg = document.getElementById('played-group');
+  if (pg) {
+    pg.style.transform = 'translateX(0)';
+    setTimeout(finishDraw, SLIDE_MS + 20);
+  } else {
+    finishDraw();
+  }
+}
+
+// 引いたカードを出発点から手札へ飛ばし、その後スライドして確定
+function animateDrawThenFinish(card, srcRect) {
+  if (!card) { slideAndFinish(); return; }
+  const handRect = document.getElementById('player-hand').getBoundingClientRect();
+  const dest = { left: handRect.left + handRect.width / 2 - 30, top: handRect.top + (handRect.height - 84) / 2 };
+  flyCard(srcRect, dest, card, FLY_MS).then(() => {
+    hands[0].push(card);
+    slideAndFinish();
+  });
+}
+
+function drawFromPile() {
+  if (phase !== 'draw' || busy) return;
+  busy = true;
+  if (deck.length === 0) reshuffleDeck();
+  const card = deck.length > 0 ? deck.pop() : null;
+  const srcRect = document.getElementById('draw-pile').getBoundingClientRect();
+  animateDrawThenFinish(card, srcRect);
+}
+
+function drawFromDiscard(i) {
+  if (phase !== 'draw' || busy) return;
+  if (!discard || discard.length === 0) return;
+  if (discard.length >= 3 && i !== 0 && i !== discard.length - 1) return;
+  busy = true;
+  const cardEl = document.querySelectorAll('#discard-pile .prev-group .card')[i];
+  const srcRect = cardEl ? cardEl.getBoundingClientRect() : document.getElementById('discard-pile').getBoundingClientRect();
+  if (cardEl) cardEl.style.visibility = 'hidden';
+  const card = discard.splice(i, 1)[0];
+  animateDrawThenFinish(card, srcRect);
+}
+
+function reshuffleDeck() {
+  if (discard && discard.length > 0) {
+    deck = [...discard];
+    shuffle(deck);
+    discard = [];
+  }
+}
+
+// 次の手番へ進める
+function advanceTurn() {
+  turn = (turn + 1) % NUM_PLAYERS;
+  if (turn === 0) {
+    phase = 'play';
+    setInfo('あなたのターンです。手札を選んで捨札をクリックして出すか、ヤニブを宣言してください。');
+    render();
+  } else {
+    phase = 'cpu';
+    setInfo(`${NAMES[turn]}のターン...`);
+    render();
+    setTimeout(() => cpuTakeTurn(turn), 900);
+  }
+}
+
+// CPU の最善プレイ（捨てるカードのインデックス配列）を選ぶ
+function cpuChoosePlay(hand) {
+  let bestPlay = [0], bestValue = -1;
+
+  for (let i = 0; i < hand.length; i++) {
+    const v = cardValue(hand[i]);
+    if (v > bestValue) { bestValue = v; bestPlay = [i]; }
+  }
+  for (let i = 0; i < hand.length; i++) {
+    for (let j = i + 1; j < hand.length; j++) {
+      if (!hand[i].isJoker && !hand[j].isJoker && hand[i].rank === hand[j].rank) {
+        const v = cardValue(hand[i]) + cardValue(hand[j]);
+        if (v > bestValue) { bestValue = v; bestPlay = [i, j]; }
+      }
+    }
+  }
+  const bySuit = {};
+  hand.forEach((c, i) => {
+    if (!c.isJoker) { (bySuit[c.suit] = bySuit[c.suit] || []).push({card: c, idx: i}); }
+  });
+  for (const suit in bySuit) {
+    const cards = bySuit[suit].sort((a, b) => rankIndex(a.card) - rankIndex(b.card));
+    for (let start = 0; start < cards.length - 2; start++) {
+      for (let end = start + 2; end < cards.length; end++) {
+        const run = cards.slice(start, end + 1);
+        const minR = rankIndex(run[0].card), maxR = rankIndex(run[run.length - 1].card);
+        if (maxR - minR === run.length - 1) {
+          const v = run.reduce((s, r) => s + cardValue(r.card), 0);
+          if (v > bestValue) { bestValue = v; bestPlay = run.map(r => r.idx); }
+        }
+      }
+    }
+  }
+  return bestPlay;
+}
+
+function cpuTakeTurn(i) {
+  if (phase === 'over') return;
+  if (handTotal(hands[i]) <= 5) { resolveYaniv(i); return; }
+
+  busy = true;
+  const seat = seatOf[i];
+  const handEl = document.getElementById('hand-' + seat);
+  const backRects = [...handEl.children].map(el => el.getBoundingClientRect());
+  const discEl = document.getElementById('discard-pile');
+  const discRect = discEl.getBoundingClientRect();
+  const deckRect = document.getElementById('draw-pile').getBoundingClientRect();
+  const hr = handEl.getBoundingClientRect();
+  const handDest = { left: hr.left + hr.width / 2 - 30, top: hr.top + hr.height / 2 - 42 };
+  const discDest = { left: discRect.left + 4, top: discRect.top + 4 };
+
+  // プレイするカードを決める
+  const bestPlay = cpuChoosePlay(hands[i]);
+  const played = bestPlay.map(idx => hands[i][idx]);
+  hands[i] = hands[i].filter((_, idx) => !bestPlay.includes(idx));
+
+  // 補充を決める：捨札の端の低い方(4点以下)を拾う、なければ山札から
+  let drawnCard = null, drawFromDisc = false, drawSrcRect = deckRect;
+  if (discard && discard.length > 0) {
+    const ends = discard.length < 3 ? discard.map((c, k) => k) : [0, discard.length - 1];
+    let bestEnd = -1, bestEndVal = Infinity;
+    for (const idx of ends) {
+      const v = cardValue(discard[idx]);
+      if (v < bestEndVal) { bestEndVal = v; bestEnd = idx; }
+    }
+    if (bestEndVal <= 4) {
+      const discCardEls = discEl.querySelectorAll('.prev-group .card');
+      drawSrcRect = (discCardEls[bestEnd] || discEl).getBoundingClientRect();
+      drawnCard = discard.splice(bestEnd, 1)[0];
+      drawFromDisc = true;
+    }
+  }
+  if (!drawnCard) {
+    if (deck.length === 0) reshuffleDeck();
+    drawnCard = deck.length > 0 ? deck.pop() : null;
+    drawSrcRect = deckRect;
+  }
+
+  // 演出1：出すカードが手札 → 捨札へ飛ぶ（表向き）
+  const playFlies = played.map((c, k) => flyCard(backRects[k] || backRects[0] || discRect, discDest, c, FLY_MS, false));
+  Promise.all(playFlies).then(() => {
+    discard = played;
+    render();
+    // 演出2：補充カードが 山札/捨札 → CPUの手札へ飛ぶ（山札からは裏向き）
+    const after = () => {
+      if (drawnCard) hands[i].push(drawnCard);
+      render();
+      busy = false;
+      advanceTurn();
+    };
+    if (drawnCard) {
+      flyCard(drawSrcRect, handDest, drawnCard, FLY_MS, !drawFromDisc).then(after);
+    } else {
+      after();
+    }
+  });
+}
+
+function declareYaniv() {
+  if (phase !== 'play' || turn !== 0 || handTotal(hands[0]) > 5) return;
+  resolveYaniv(0);
+}
+
+function resolveYaniv(declarer) {
+  phase = 'over';
+  render();
+  const totals = hands.map(h => handTotal(h));
+  const D = totals[declarer];
+
+  let minOther = Infinity, minIdx = -1;
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    if (i === declarer) continue;
+    if (totals[i] < minOther) { minOther = totals[i]; minIdx = i; }
+  }
+
+  let html = `<h2>${NAMES[declarer]}がヤニブ宣言！</h2>`;
+  html += `<div class="result-detail">`;
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    html += `<p><b>${NAMES[i]}</b> — ${totals[i]}点</p><div class="revealed-hand">${hands[i].map(c => renderCard(c)).join('')}</div>`;
+  }
+  html += `</div>`;
+
+  const changes = [0, 0, 0, 0];
+
+  if (D < minOther) {
+    // 成功：単独最小。最高点プレイヤーとの差を獲得、最高点プレイヤーは同点を失う
+    let maxIdx = 0;
+    for (let i = 1; i < NUM_PLAYERS; i++) if (totals[i] > totals[maxIdx]) maxIdx = i;
+    const gain = totals[maxIdx] - D;
+    changes[declarer] += gain;
+    changes[maxIdx] -= gain;
+    html += `<p style="color:#4caf50;font-size:1.2em">ヤニブ成功！</p>`;
+    html += `<p>${NAMES[declarer]}: +${gain}点 ／ ${NAMES[maxIdx]}(最高点): -${gain}点</p>`;
+  } else {
+    // 失敗：宣言者以下の人がいた。差の20倍を失い、最も低い人がそれを得る
+    const diff = D - minOther;
+    const penalty = diff * 20;
+    changes[declarer] -= penalty;
+    changes[minIdx] += penalty;
+    if (minIdx === 0) {
+      // 自分(プレイヤー)が宣言者より低かった → ヤニブ返し！（勝利色）
+      html += `<p style="color:#4caf50;font-size:1.2em">ヤニブ返し！</p>`;
+      html += `<p>${NAMES[minIdx]}: +${penalty}点 ／ ${NAMES[declarer]}: -${penalty}点</p>`;
+    } else {
+      html += `<p style="color:#f44336;font-size:1.2em">ヤニブ失敗！（${NAMES[minIdx]} の方が低い）</p>`;
+      html += `<p>${NAMES[declarer]}: -${penalty}点 ／ ${NAMES[minIdx]}: +${penalty}点</p>`;
+    }
+  }
+
+  for (let i = 0; i < NUM_PLAYERS; i++) scores[i] += changes[i];
+  roundsPlayed++;
+  scoreHistory.push(scores.slice());
+  html += `<p style="margin-top:10px">累計 — ` + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ') + `</p>`;
+  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了</p>`;
+  html += `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">`;
+  html += `<button class="btn-new" onclick="showGraph()">次へ</button>`;
+  if (roundsPlayed < targetSets) {
+    html += `<button class="btn-new" style="background:#c0392b" onclick="endGame()">ゲームを終了する</button>`;
+  }
+  html += `</div>`;
+
+  showModal(html);
+  render();
+}
+
+function setInfo(msg) { document.getElementById('info').textContent = msg; }
+function showModal(html) { document.getElementById('modal-content').innerHTML = html; document.getElementById('modal').style.display = 'flex'; }
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+// 開始画面：CPUの人数とセット数を選んでから「ゲーム開始」で開始
+let selectedCpuCount = 3;
+let selectedSets = 3;
+const SET_OPTIONS = [1, 3, 5, 10];
+let targetSets = 3;   // 行うセット（ラウンド）数
+let roundsPlayed = 0; // 終了したラウンド数
+
+function showStartScreen() {
+  let html = `<h2>ヤニブ</h2>`;
+  html += `<p>CPUの人数を選んでください（1〜3人）</p>`;
+  html += `<div style="display:flex;gap:10px;justify-content:center;margin-top:10px;">`;
+  for (let n = 1; n <= 3; n++) {
+    const sel = n === selectedCpuCount ? 'selected-choice' : '';
+    html += `<button class="choice-btn ${sel}" onclick="selectCpuCount(${n})">CPU ${n}人</button>`;
+  }
+  html += `</div>`;
+  html += `<p style="margin-top:16px;">セット数（ラウンド数）を選んでください</p>`;
+  html += `<div style="display:flex;gap:10px;justify-content:center;margin-top:10px;flex-wrap:wrap;">`;
+  for (const n of SET_OPTIONS) {
+    const sel = n === selectedSets ? 'selected-choice' : '';
+    html += `<button class="choice-btn ${sel}" onclick="selectSets(${n})">${n}セット</button>`;
+  }
+  html += `</div>`;
+  html += `<div style="margin-top:22px;"><button class="btn-new" onclick="startNewGame()">ゲーム開始</button></div>`;
+  showModal(html);
+}
+
+function selectCpuCount(n) { selectedCpuCount = n; showStartScreen(); }
+function selectSets(n) { selectedSets = n; showStartScreen(); }
+
+// 新規ゲーム：スコアとラウンドをリセットして開始
+function startNewGame() {
+  scores = [0, 0, 0, 0];
+  roundsPlayed = 0;
+  targetSets = selectedSets;
+  scoreHistory = [[0, 0, 0, 0]];
+  closeModal();
+  startGame(selectedCpuCount);
+}
+
+// スコア推移グラフ（横軸=セット数, 縦軸=総ポイント）。最新セットの線をアニメーションで描く
+function showGraph() {
+  const sets = roundsPlayed; // 完了セット数。x は 0..sets
+  const W = 500, H = 340, padL = 48, padR = 24, padT = 24, padB = 42;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  let maxV = 1, minV = 0;
+  for (const snap of scoreHistory) for (let i = 0; i < NUM_PLAYERS; i++) {
+    maxV = Math.max(maxV, snap[i]); minV = Math.min(minV, snap[i]);
+  }
+  if (maxV === minV) { maxV += 1; minV -= 1; }
+  const margin = (maxV - minV) * 0.12 || 1;
+  maxV += margin; minV -= margin;
+
+  const xFor = s => padL + (sets === 0 ? plotW / 2 : plotW * s / sets);
+  const yFor = v => padT + plotH * (1 - (v - minV) / (maxV - minV));
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;background:#1c1c1c;border-radius:8px;">`;
+
+  // Y軸グリッド＋目盛り
+  const yticks = 5;
+  for (let t = 0; t <= yticks; t++) {
+    const v = minV + (maxV - minV) * t / yticks;
+    const y = yFor(v);
+    svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#3a3a3a" stroke-width="1"/>`;
+    svg += `<text x="${padL - 6}" y="${y + 4}" fill="#aaa" font-size="11" text-anchor="end">${Math.round(v)}</text>`;
+  }
+  // X軸グリッド＋セット番号
+  for (let s = 0; s <= sets; s++) {
+    const x = xFor(s);
+    svg += `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#2e2e2e" stroke-width="1"/>`;
+    svg += `<text x="${x}" y="${H - padB + 16}" fill="#aaa" font-size="11" text-anchor="middle">${s}</text>`;
+  }
+  // 0ライン強調
+  if (minV < 0 && maxV > 0) {
+    const y0 = yFor(0);
+    svg += `<line x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}" stroke="#666" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  }
+  // 軸ラベル
+  svg += `<text x="${padL + plotW / 2}" y="${H - 6}" fill="#ddd" font-size="12" text-anchor="middle">セット数</text>`;
+  svg += `<text x="14" y="${padT + plotH / 2}" fill="#ddd" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${padT + plotH / 2})">総ポイント</text>`;
+
+  // プレイヤーごとの折れ線
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    const col = PLAYER_COLORS[i];
+    // 前セットまでの確定部分
+    const pts = [];
+    for (let s = 0; s < sets; s++) pts.push(`${xFor(s)},${yFor(scoreHistory[s][i])}`);
+    if (pts.length >= 2) svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2.5"/>`;
+    for (let s = 0; s < sets; s++) svg += `<circle cx="${xFor(s)}" cy="${yFor(scoreHistory[s][i])}" r="3" fill="${col}"/>`;
+    // 最新セットの移動をアニメーション
+    if (sets >= 1) {
+      const x1 = xFor(sets - 1), y1 = yFor(scoreHistory[sets - 1][i]);
+      const x2 = xFor(sets), y2 = yFor(scoreHistory[sets][i]);
+      const len = Math.hypot(x2 - x1, y2 - y1) || 0.001;
+      svg += `<line class="anim-seg" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="3.5" stroke-linecap="round" style="stroke-dasharray:${len};stroke-dashoffset:${len};transition:stroke-dashoffset 1.1s ease;"/>`;
+      svg += `<circle class="anim-dot" cx="${x2}" cy="${y2}" r="4.5" fill="${col}" style="opacity:0;transition:opacity .5s ease .9s;"/>`;
+    }
+  }
+  svg += `</svg>`;
+
+  // 凡例
+  let legend = `<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px;font-size:.85em;">`;
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    legend += `<span style="color:${PLAYER_COLORS[i]}">■ ${NAMES[i]}：${scores[i]}点</span>`;
+  }
+  legend += `</div>`;
+
+  let html = `<h2>スコア推移（${roundsPlayed} / ${targetSets} セット）</h2>` + svg + legend;
+  html += `<div style="margin-top:14px;">`;
+  if (roundsPlayed >= targetSets) {
+    html += `<button class="btn-new" onclick="endGame()">最終結果を見る</button>`;
+  } else {
+    html += `<button class="btn-new" onclick="closeModal();startGame()">次のラウンドへ</button>`;
+  }
+  html += `</div>`;
+  showModal(html);
+
+  // 線とドットのアニメーションを発火
+  setTimeout(() => {
+    document.querySelectorAll('.anim-seg').forEach(el => { el.style.strokeDashoffset = '0'; });
+    document.querySelectorAll('.anim-dot').forEach(el => { el.style.opacity = '1'; });
+  }, 60);
+}
+
+// ゲームを終了する：最終結果を表示して最初の画面へ戻れるようにする
+function endGame() {
+  phase = 'over';
+  let html = `<h2>ゲーム終了（全${targetSets}セット）</h2>`;
+  const order = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
+  html += `<div class="result-detail">`;
+  order.forEach((o, rank) => {
+    html += `<p>${rank + 1}位　${o.n}：${o.s}点</p>`;
+  });
+  html += `</div>`;
+  html += `<p>お疲れさまでした！</p>`;
+  html += `<button class="btn-new" onclick="scores=[0,0,0,0];showStartScreen()">最初から始める</button>`;
+  showModal(html);
+}
+
+function startGame(numCpus) {
+  if (numCpus) {
+    currentNumCpus = Math.min(3, Math.max(1, numCpus));
+  }
+  NUM_PLAYERS = currentNumCpus + 1;
+  seatOf = [0].concat(CPU_SEAT_LAYOUT[currentNumCpus]);
+  NAMES = seatOf.map(s => SEAT_NAMES[s]);
+
+  deck = createDeck();
+  shuffle(deck);
+  hands = [];
+  for (let i = 0; i < NUM_PLAYERS; i++) hands.push(deck.splice(0, 5));
+  sortHand(hands[0]);
+  discard = [deck.pop()];
+  justPlayed = null;
+  selectedIndices.clear();
+  busy = false;
+  turn = 0;
+  phase = 'play';
+  setInfo('あなたのターンです。手札を選んで捨札をクリックして出すか、ヤニブを宣言してください。');
+  render();
+}
+
+showStartScreen();
+</script>
+</body>
+</html>
