@@ -92,6 +92,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .choice-btn { background: #455a64; color: #fff; }
 .choice-btn:hover { background: #37474f; }
 .choice-btn.selected-choice { background: #ffd700; color: #222; box-shadow: 0 0 10px rgba(255,215,0,.6); }
+.modal-content input { padding: 7px 10px; border-radius: 6px; border: none; font-size: 1em; text-align: center; }
 
 .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal-content { background: #2c2c2c; padding: 20px 28px; border-radius: 12px; text-align: center; max-width: 560px; max-height: 90vh; overflow-y: auto; }
@@ -152,35 +153,62 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div class="modal-content" id="modal-content"></div>
 </div>
 
+<!-- Firebase (オンライン対戦用) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
 <script>
+const firebaseConfig = {
+  apiKey: "AIzaSyDpS7_IMlaFddM8604aiVsaK4s-QGJ1J2A",
+  authDomain: "yaniv-c361e.firebaseapp.com",
+  databaseURL: "https://yaniv-c361e-default-rtdb.firebaseio.com",
+  projectId: "yaniv-c361e",
+  storageBucket: "yaniv-c361e.firebasestorage.app",
+  messagingSenderId: "954794287514",
+  appId: "1:954794287514:web:aab303e16a6c33781bda23",
+  measurementId: "G-EKMTBZTNX5"
+};
+
 const SUITS = ['♠','♥','♦','♣'];
 const SUIT_COLORS = {'♠':'black','♣':'black','♥':'red','♦':'red'};
 const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
 const RANK_VALUES = {A:1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,J:11,Q:12,K:13};
 
-// 席の位置: 0=下(あなた), 1=左, 2=上, 3=右
+// 席の位置: 0=下, 1=左, 2=上, 3=右
 const SEAT_NAMES = ['あなた', 'CPU左', 'CPU上', 'CPU右'];
-// グラフ用の各プレイヤーの色
 const PLAYER_COLORS = ['#ffd700', '#4fc3f7', '#ff8a65', '#81c784'];
-let scoreHistory = [[0, 0, 0, 0]]; // 各セット終了時点の累計スコア。index0=開始時(0点)
-// CPU人数ごとの席割り（プレイヤーindex 1.. を時計回りに配置）
-//  下→左→上→右 の時計回り順で席を割り当てる
+let scoreHistory = [[0, 0, 0, 0]];
+// プレイヤー人数ごとの席割り（自分以外を時計回りに配置）
 const CPU_SEAT_LAYOUT = { 1: [2], 2: [1, 3], 3: [1, 2, 3] };
 
 let NUM_PLAYERS = 4;
 let currentNumCpus = 3;
-let seatOf = [0, 1, 2, 3]; // プレイヤーindex -> 席位置
+let seatOf = [0, 1, 2, 3];
 let NAMES = ['あなた', 'CPU左', 'CPU上', 'CPU右'];
 
 let deck;
-let hands;        // 各プレイヤーの手札 hands[0..3]
-let discard;      // 取得可能な捨札の山（直前にプレイされたカード）
-let justPlayed;   // あなたが出したばかりのカード（補充前。山の右上に重ねて表示）
-let turn;         // 現在の手番 0..3
-let phase;        // 'play' | 'draw' | 'cpu' | 'over'
-let busy = false; // スライド演出中の二重操作防止
+let hands;
+let discard;
+let justPlayed;
+let turn;
+let phase;          // 'play' | 'draw' | 'cpu' | 'over'
+let busy = false;
 let selectedIndices = new Set();
 let scores = [0, 0, 0, 0];
+
+// ===== オンライン用の状態 =====
+let online = false;     // オンライン対戦中か
+let isHost = false;     // 自分がホストか
+let myIndex = 0;        // 自分のプレイヤーindex（=席番号）。オフラインは常に0
+let myId = 'p' + Math.random().toString(36).slice(2, 10);
+let myName = '';
+let mySeat = 0;
+let roomCode = null;
+let inGame = false;     // オンラインで対局画面に入ったか
+let currentResult = null; // ホストが配信する結果HTML
+let gameFinalFlag = false;
+let roomPlayers = {};   // id -> {name, seat, connected}
+let db = null, roomRef = null, playersRef = null, statusRef = null, gameRef = null, moveRef = null;
 
 function createDeck() {
   const d = [];
@@ -200,7 +228,6 @@ function shuffle(arr) {
 function cardValue(c) { return c.isJoker ? 0 : RANK_VALUES[c.rank]; }
 function handTotal(hand) { return hand.reduce((s, c) => s + cardValue(c), 0); }
 
-// A,2-10,J,Q,K,ジョーカー の順に並べ替える
 function sortOrder(c) { return c.isJoker ? 100 : RANK_VALUES[c.rank]; }
 function sortHand(hand) {
   hand.sort((a, b) => {
@@ -218,8 +245,6 @@ function cardFaceHTML(c, extraClass, attrs) {
 }
 function renderCard(c) { return cardFaceHTML(c); }
 
-// カードが from(矩形) から to(矩形) へ飛ぶ演出。Promiseで完了を返す
-// faceDown=true なら裏向きで飛ばす（中身を見せない）
 function flyCard(from, to, card, duration, faceDown) {
   return new Promise(resolve => {
     const el = document.createElement('div');
@@ -234,45 +259,53 @@ function flyCard(from, to, card, duration, faceDown) {
     el.style.top = from.top + 'px';
     el.style.transitionDuration = duration + 'ms';
     document.body.appendChild(el);
-    el.getBoundingClientRect(); // reflow
+    el.getBoundingClientRect();
     el.style.left = to.left + 'px';
     el.style.top = to.top + 'px';
     setTimeout(() => { el.remove(); resolve(); }, duration);
   });
 }
 
-const FLY_MS = 650;   // 飛ぶ演出の時間
-const SLIDE_MS = 600; // 出したカードが捨札に収まる時間
+const FLY_MS = 650;
+const SLIDE_MS = 600;
 
 function render() {
-  // 使わない相手席を隠す
+  // 自分を下にして時計回りに席を割り当てる
+  const order = [];
+  for (let k = 0; k < NUM_PLAYERS; k++) order.push((myIndex + k) % NUM_PLAYERS);
+  const otherSeats = CPU_SEAT_LAYOUT[NUM_PLAYERS - 1] || [];
+  const seatForPlayer = {};
+  seatForPlayer[order[0]] = 0;
+  for (let k = 1; k < NUM_PLAYERS; k++) seatForPlayer[order[k]] = otherSeats[k - 1];
+
   for (const s of [1, 2, 3]) document.getElementById('seat-' + s).style.display = 'none';
 
-  // 相手プレイヤーを各席に配置
-  for (let i = 1; i < NUM_PLAYERS; i++) {
-    const s = seatOf[i];
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    if (i === myIndex) continue;
+    const s = seatForPlayer[i];
     document.getElementById('seat-' + s).style.display = 'flex';
-    document.getElementById('label-' + s).textContent = `${NAMES[i]} (${hands[i].length}枚)`;
+    const dc = (online && !seatConnected(i)) ? '（切断）' : '';
+    document.getElementById('label-' + s).textContent = `${NAMES[i]} (${hands[i].length}枚)${dc}`;
     document.getElementById('hand-' + s).innerHTML = hands[i].map(() => '<div class="card card-back"></div>').join('');
   }
 
-  // あなた（席0・下）
+  const me = hands[myIndex] || [];
   const plEl = document.getElementById('player-hand');
-  plEl.innerHTML = hands[0].map((c, i) => {
+  plEl.innerHTML = me.map((c, i) => {
     const sel = selectedIndices.has(i) ? 'selected' : '';
     return cardFaceHTML(c, sel, `onclick="toggleSelect(${i})"`);
   }).join('');
-  document.getElementById('label-0').textContent = `あなた (${hands[0].length}枚 / 合計: ${handTotal(hands[0])}点)`;
+  const myLabel = online ? `${NAMES[myIndex]}（あなた）` : 'あなた';
+  document.getElementById('label-0').textContent = `${myLabel} (${me.length}枚 / 合計: ${handTotal(me)}点)`;
 
-  // 手番のハイライト
   for (let s = 0; s < 4; s++) {
-    document.getElementById('seat-' + s).classList.toggle('active', s === seatOf[turn] && phase !== 'over');
+    document.getElementById('seat-' + s).classList.toggle('active', s === seatForPlayer[turn] && phase !== 'over');
   }
 
-  // 捨札
+  const isMyTurn = turn === myIndex;
   const discEl = document.getElementById('discard-pile');
   let discHTML = '';
-  const canPick = phase === 'draw';
+  const canPick = phase === 'draw' && isMyTurn;
   if (discard && discard.length > 0) {
     discHTML += `<div class="card-group prev-group">` +
       discard.map((c, i) => {
@@ -287,19 +320,17 @@ function render() {
   }
   if (!discHTML) discHTML = '<div style="width:60px;height:84px;border:2px dashed rgba(255,255,255,.3);border-radius:6px;"></div>';
   discEl.innerHTML = discHTML;
-  document.getElementById('draw-pile').classList.toggle('drawable', phase === 'draw');
+  document.getElementById('draw-pile').classList.toggle('drawable', canPick);
 
-  // ボタン・強調
-  document.getElementById('btn-yaniv').disabled = phase !== 'play' || handTotal(hands[0]) > 5;
-  discEl.classList.toggle('playable', phase === 'play' && selectedIndices.size > 0);
+  document.getElementById('btn-yaniv').disabled = !(phase === 'play' && isMyTurn && handTotal(me) <= 5);
+  discEl.classList.toggle('playable', phase === 'play' && isMyTurn && selectedIndices.size > 0);
 
-  // スコア
   const roundLabel = `[ラウンド ${Math.min(roundsPlayed + 1, targetSets)}/${targetSets}] `;
   document.getElementById('scores').textContent = roundLabel + '累計スコア — ' + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ');
 }
 
 function toggleSelect(i) {
-  if (phase !== 'play') return;
+  if (phase !== 'play' || turn !== myIndex) return;
   if (selectedIndices.has(i)) selectedIndices.delete(i);
   else selectedIndices.add(i);
   render();
@@ -312,13 +343,11 @@ function validatePlay(cards) {
   const nonJokers = cards.filter(c => !c.isJoker);
   const jokerCount = cards.length - nonJokers.length;
 
-  // 同じランク
   if (nonJokers.length >= 2) {
     const allSameRank = nonJokers.every(c => c.rank === nonJokers[0].rank);
     if (allSameRank && jokerCount === 0) return true;
   }
 
-  // 同じマークの連番（3枚以上、ジョーカーで穴埋め可）
   if (cards.length >= 3) {
     const suits = nonJokers.map(c => c.suit);
     const uniqueSuits = [...new Set(suits)];
@@ -349,19 +378,26 @@ function validatePlay(cards) {
   return false;
 }
 
-// 捨札エリアのクリック：プレイ中なら選択カードを出す
 function discardAreaClick() {
   if (phase === 'play') playCards();
 }
 
 function playCards() {
-  if (phase !== 'play' || turn !== 0 || busy) return;
+  if (phase !== 'play' || turn !== myIndex || busy) return;
   const indices = [...selectedIndices].sort((a, b) => a - b);
   if (indices.length === 0) { setInfo('カードを選択してください'); return; }
-  const cards = indices.map(i => hands[0][i]);
+  const cards = indices.map(i => hands[myIndex][i]);
   if (!validatePlay(cards)) { setInfo('無効な組み合わせです'); return; }
 
-  // 手札のカードの現在位置を取得（飛ばす出発点）
+  if (online) {
+    busy = true;
+    sendMove({ type: 'play', cards: cards.map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker })) });
+    selectedIndices.clear();
+    setInfo('カードを出しています...');
+    return;
+  }
+
+  // ===== オフライン：飛行アニメーション付き =====
   const handEls = document.querySelectorAll('#player-hand .card');
   const sourceRects = indices.map(i => handEls[i].getBoundingClientRect());
 
@@ -373,7 +409,6 @@ function playCards() {
   setInfo('カードを出しています...');
   render();
 
-  // 出したカードを一旦隠し、手札の位置から捨札へ飛ばす
   const pg = document.getElementById('played-group');
   const destEls = pg ? [...pg.children] : [];
   if (pg) pg.style.visibility = 'hidden';
@@ -390,7 +425,6 @@ function playCards() {
   });
 }
 
-// 補充完了後、出したカードを新しい捨札の山にして次の手番へ
 function finishDraw() {
   discard = justPlayed;
   justPlayed = null;
@@ -399,7 +433,6 @@ function finishDraw() {
   advanceTurn();
 }
 
-// 出したカードを捨札の位置へゆっくりスライドさせて確定
 function slideAndFinish() {
   const pg = document.getElementById('played-group');
   if (pg) {
@@ -410,7 +443,6 @@ function slideAndFinish() {
   }
 }
 
-// 引いたカードを出発点から手札へ飛ばし、その後スライドして確定
 function animateDrawThenFinish(card, srcRect) {
   if (!card) { slideAndFinish(); return; }
   const handRect = document.getElementById('player-hand').getBoundingClientRect();
@@ -422,7 +454,8 @@ function animateDrawThenFinish(card, srcRect) {
 }
 
 function drawFromPile() {
-  if (phase !== 'draw' || busy) return;
+  if (phase !== 'draw' || turn !== myIndex || busy) return;
+  if (online) { busy = true; sendMove({ type: 'draw', source: 'deck' }); return; }
   busy = true;
   if (deck.length === 0) reshuffleDeck();
   const card = deck.length > 0 ? deck.pop() : null;
@@ -431,9 +464,10 @@ function drawFromPile() {
 }
 
 function drawFromDiscard(i) {
-  if (phase !== 'draw' || busy) return;
+  if (phase !== 'draw' || turn !== myIndex || busy) return;
   if (!discard || discard.length === 0) return;
   if (discard.length >= 3 && i !== 0 && i !== discard.length - 1) return;
+  if (online) { busy = true; sendMove({ type: 'draw', source: 'discard', index: i }); return; }
   busy = true;
   const cardEl = document.querySelectorAll('#discard-pile .prev-group .card')[i];
   const srcRect = cardEl ? cardEl.getBoundingClientRect() : document.getElementById('discard-pile').getBoundingClientRect();
@@ -450,7 +484,6 @@ function reshuffleDeck() {
   }
 }
 
-// 次の手番へ進める
 function advanceTurn() {
   turn = (turn + 1) % NUM_PLAYERS;
   if (turn === 0) {
@@ -465,10 +498,8 @@ function advanceTurn() {
   }
 }
 
-// CPU の最善プレイ（捨てるカードのインデックス配列）を選ぶ
 function cpuChoosePlay(hand) {
   let bestPlay = [0], bestValue = -1;
-
   for (let i = 0; i < hand.length; i++) {
     const v = cardValue(hand[i]);
     if (v > bestValue) { bestValue = v; bestPlay = [i]; }
@@ -516,12 +547,10 @@ function cpuTakeTurn(i) {
   const handDest = { left: hr.left + hr.width / 2 - 30, top: hr.top + hr.height / 2 - 42 };
   const discDest = { left: discRect.left + 4, top: discRect.top + 4 };
 
-  // プレイするカードを決める
   const bestPlay = cpuChoosePlay(hands[i]);
   const played = bestPlay.map(idx => hands[i][idx]);
   hands[i] = hands[i].filter((_, idx) => !bestPlay.includes(idx));
 
-  // 補充を決める：捨札の端の低い方(4点以下)を拾う、なければ山札から
   let drawnCard = null, drawFromDisc = false, drawSrcRect = deckRect;
   if (discard && discard.length > 0) {
     const ends = discard.length < 3 ? discard.map((c, k) => k) : [0, discard.length - 1];
@@ -543,12 +572,10 @@ function cpuTakeTurn(i) {
     drawSrcRect = deckRect;
   }
 
-  // 演出1：出すカードが手札 → 捨札へ飛ぶ（表向き）
   const playFlies = played.map((c, k) => flyCard(backRects[k] || backRects[0] || discRect, discDest, c, FLY_MS, false));
   Promise.all(playFlies).then(() => {
     discard = played;
     render();
-    // 演出2：補充カードが 山札/捨札 → CPUの手札へ飛ぶ（山札からは裏向き）
     const after = () => {
       if (drawnCard) hands[i].push(drawnCard);
       render();
@@ -564,10 +591,12 @@ function cpuTakeTurn(i) {
 }
 
 function declareYaniv() {
-  if (phase !== 'play' || turn !== 0 || handTotal(hands[0]) > 5) return;
-  resolveYaniv(0);
+  if (phase !== 'play' || turn !== myIndex || handTotal(hands[myIndex]) > 5) return;
+  if (online) { busy = true; sendMove({ type: 'yaniv' }); return; }
+  resolveYaniv(myIndex);
 }
 
+// オフライン用ヤニブ判定（結果モーダル表示）
 function resolveYaniv(declarer) {
   phase = 'over';
   render();
@@ -590,7 +619,6 @@ function resolveYaniv(declarer) {
   const changes = [0, 0, 0, 0];
 
   if (D < minOther) {
-    // 成功：単独最小。最高点プレイヤーとの差を獲得、最高点プレイヤーは同点を失う
     let maxIdx = 0;
     for (let i = 1; i < NUM_PLAYERS; i++) if (totals[i] > totals[maxIdx]) maxIdx = i;
     const gain = totals[maxIdx] - D;
@@ -599,13 +627,11 @@ function resolveYaniv(declarer) {
     html += `<p style="color:#4caf50;font-size:1.2em">ヤニブ成功！</p>`;
     html += `<p>${NAMES[declarer]}: +${gain}点 ／ ${NAMES[maxIdx]}(最高点): -${gain}点</p>`;
   } else {
-    // 失敗：宣言者以下の人がいた。差の20倍を失い、最も低い人がそれを得る
     const diff = D - minOther;
     const penalty = diff * 20;
     changes[declarer] -= penalty;
     changes[minIdx] += penalty;
     if (minIdx === 0) {
-      // 自分(プレイヤー)が宣言者より低かった → ヤニブ返し！（勝利色）
       html += `<p style="color:#4caf50;font-size:1.2em">ヤニブ返し！</p>`;
       html += `<p>${NAMES[minIdx]}: +${penalty}点 ／ ${NAMES[declarer]}: -${penalty}点</p>`;
     } else {
@@ -634,15 +660,26 @@ function setInfo(msg) { document.getElementById('info').textContent = msg; }
 function showModal(html) { document.getElementById('modal-content').innerHTML = html; document.getElementById('modal').style.display = 'flex'; }
 function closeModal() { document.getElementById('modal').style.display = 'none'; }
 
-// 開始画面：CPUの人数とセット数を選んでから「ゲーム開始」で開始
+// ===== タイトル / モード選択 =====
+function showTitle() {
+  online = false; isHost = false; inGame = false; myIndex = 0;
+  let html = `<h2>ヤニブ</h2><p>モードを選んでください</p>`;
+  html += `<div style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap;">`;
+  html += `<button class="btn-new" onclick="showStartScreen()">オフライン（CPU対戦）</button>`;
+  html += `<button class="btn-new" onclick="showOnlineMenu()">オンライン対戦</button>`;
+  html += `</div>`;
+  showModal(html);
+}
+
 let selectedCpuCount = 3;
 let selectedSets = 3;
 const SET_OPTIONS = [1, 3, 5, 10];
-let targetSets = 3;   // 行うセット（ラウンド）数
-let roundsPlayed = 0; // 終了したラウンド数
+let targetSets = 3;
+let roundsPlayed = 0;
 
 function showStartScreen() {
-  let html = `<h2>ヤニブ</h2>`;
+  online = false; isHost = false; inGame = false; myIndex = 0;
+  let html = `<h2>オフライン対戦</h2>`;
   html += `<p>CPUの人数を選んでください（1〜3人）</p>`;
   html += `<div style="display:flex;gap:10px;justify-content:center;margin-top:10px;">`;
   for (let n = 1; n <= 3; n++) {
@@ -657,15 +694,18 @@ function showStartScreen() {
     html += `<button class="choice-btn ${sel}" onclick="selectSets(${n})">${n}セット</button>`;
   }
   html += `</div>`;
-  html += `<div style="margin-top:22px;"><button class="btn-new" onclick="startNewGame()">ゲーム開始</button></div>`;
+  html += `<div style="margin-top:22px;display:flex;gap:8px;justify-content:center;">`;
+  html += `<button class="btn-new" onclick="startNewGame()">ゲーム開始</button>`;
+  html += `<button class="choice-btn" onclick="showTitle()">戻る</button>`;
+  html += `</div>`;
   showModal(html);
 }
 
 function selectCpuCount(n) { selectedCpuCount = n; showStartScreen(); }
 function selectSets(n) { selectedSets = n; showStartScreen(); }
 
-// 新規ゲーム：スコアとラウンドをリセットして開始
 function startNewGame() {
+  online = false; isHost = false; myIndex = 0;
   scores = [0, 0, 0, 0];
   roundsPlayed = 0;
   targetSets = selectedSets;
@@ -674,9 +714,8 @@ function startNewGame() {
   startGame(selectedCpuCount);
 }
 
-// スコア推移グラフ（横軸=セット数, 縦軸=総ポイント）。最新セットの線をアニメーションで描く
 function showGraph() {
-  const sets = roundsPlayed; // 完了セット数。x は 0..sets
+  const sets = roundsPlayed;
   const W = 500, H = 340, padL = 48, padR = 24, padT = 24, padB = 42;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
@@ -692,8 +731,6 @@ function showGraph() {
   const yFor = v => padT + plotH * (1 - (v - minV) / (maxV - minV));
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;background:#1c1c1c;border-radius:8px;">`;
-
-  // Y軸グリッド＋目盛り
   const yticks = 5;
   for (let t = 0; t <= yticks; t++) {
     const v = minV + (maxV - minV) * t / yticks;
@@ -701,30 +738,24 @@ function showGraph() {
     svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#3a3a3a" stroke-width="1"/>`;
     svg += `<text x="${padL - 6}" y="${y + 4}" fill="#aaa" font-size="11" text-anchor="end">${Math.round(v)}</text>`;
   }
-  // X軸グリッド＋セット番号
   for (let s = 0; s <= sets; s++) {
     const x = xFor(s);
     svg += `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#2e2e2e" stroke-width="1"/>`;
     svg += `<text x="${x}" y="${H - padB + 16}" fill="#aaa" font-size="11" text-anchor="middle">${s}</text>`;
   }
-  // 0ライン強調
   if (minV < 0 && maxV > 0) {
     const y0 = yFor(0);
     svg += `<line x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}" stroke="#666" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   }
-  // 軸ラベル
   svg += `<text x="${padL + plotW / 2}" y="${H - 6}" fill="#ddd" font-size="12" text-anchor="middle">セット数</text>`;
   svg += `<text x="14" y="${padT + plotH / 2}" fill="#ddd" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${padT + plotH / 2})">総ポイント</text>`;
 
-  // プレイヤーごとの折れ線
   for (let i = 0; i < NUM_PLAYERS; i++) {
     const col = PLAYER_COLORS[i];
-    // 前セットまでの確定部分
     const pts = [];
     for (let s = 0; s < sets; s++) pts.push(`${xFor(s)},${yFor(scoreHistory[s][i])}`);
     if (pts.length >= 2) svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2.5"/>`;
     for (let s = 0; s < sets; s++) svg += `<circle cx="${xFor(s)}" cy="${yFor(scoreHistory[s][i])}" r="3" fill="${col}"/>`;
-    // 最新セットの移動をアニメーション
     if (sets >= 1) {
       const x1 = xFor(sets - 1), y1 = yFor(scoreHistory[sets - 1][i]);
       const x2 = xFor(sets), y2 = yFor(scoreHistory[sets][i]);
@@ -735,7 +766,6 @@ function showGraph() {
   }
   svg += `</svg>`;
 
-  // 凡例
   let legend = `<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px;font-size:.85em;">`;
   for (let i = 0; i < NUM_PLAYERS; i++) {
     legend += `<span style="color:${PLAYER_COLORS[i]}">■ ${NAMES[i]}：${scores[i]}点</span>`;
@@ -744,7 +774,9 @@ function showGraph() {
 
   let html = `<h2>スコア推移（${roundsPlayed} / ${targetSets} セット）</h2>` + svg + legend;
   html += `<div style="margin-top:14px;">`;
-  if (roundsPlayed >= targetSets) {
+  if (online) {
+    html += `<button class="btn-new" onclick="reopenResult()">戻る</button>`;
+  } else if (roundsPlayed >= targetSets) {
     html += `<button class="btn-new" onclick="endGame()">最終結果を見る</button>`;
   } else {
     html += `<button class="btn-new" onclick="closeModal();startGame()">次のラウンドへ</button>`;
@@ -752,14 +784,12 @@ function showGraph() {
   html += `</div>`;
   showModal(html);
 
-  // 線とドットのアニメーションを発火
   setTimeout(() => {
     document.querySelectorAll('.anim-seg').forEach(el => { el.style.strokeDashoffset = '0'; });
     document.querySelectorAll('.anim-dot').forEach(el => { el.style.opacity = '1'; });
   }, 60);
 }
 
-// ゲームを終了する：最終結果を表示して最初の画面へ戻れるようにする
 function endGame() {
   phase = 'over';
   let html = `<h2>ゲーム終了（全${targetSets}セット）</h2>`;
@@ -770,7 +800,7 @@ function endGame() {
   });
   html += `</div>`;
   html += `<p>お疲れさまでした！</p>`;
-  html += `<button class="btn-new" onclick="scores=[0,0,0,0];showStartScreen()">最初から始める</button>`;
+  html += `<button class="btn-new" onclick="scores=[0,0,0,0];showTitle()">タイトルへ</button>`;
   showModal(html);
 }
 
@@ -797,7 +827,454 @@ function startGame(numCpus) {
   render();
 }
 
-showStartScreen();
+/* =========================================================
+   オンライン対戦（Firebase Realtime Database・部屋コード方式）
+   ホストが進行を管理し rooms/{code}/game に状態を配信。
+   手番者は rooms/{code}/move に手を書き、ホストが適用する。
+   ========================================================= */
+
+function ensureOnline() {
+  if (typeof firebase === 'undefined') {
+    alert('オンライン機能を読み込めませんでした。ネット接続を確認してください。');
+    return false;
+  }
+  if (!db) {
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+  }
+  return true;
+}
+
+function genCode() {
+  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 4; i++) s += c[Math.floor(Math.random() * c.length)];
+  return s;
+}
+
+function captureName() {
+  const el = document.getElementById('nameInput');
+  if (el && el.value.trim()) myName = el.value.trim().slice(0, 10);
+}
+
+function showOnlineMenu() {
+  let html = `<h2>オンライン対戦</h2>`;
+  html += `<p>名前</p><input id="nameInput" value="${myName || ''}" maxlength="10" placeholder="なまえ">`;
+  html += `<p style="margin-top:14px;">セット数（部屋を作る人が設定）</p>`;
+  html += `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">`;
+  for (const n of SET_OPTIONS) {
+    const sel = n === selectedSets ? 'selected-choice' : '';
+    html += `<button class="choice-btn ${sel}" onclick="selectSetsOnline(${n})">${n}</button>`;
+  }
+  html += `</div>`;
+  html += `<div style="margin-top:14px;"><button class="btn-new" onclick="createRoom()">部屋を作る</button></div>`;
+  html += `<hr style="border-color:#555;margin:16px 0;">`;
+  html += `<p>部屋コードで参加</p>`;
+  html += `<input id="codeInput" maxlength="4" placeholder="ABCD" style="text-transform:uppercase;width:120px;font-size:1.2em;letter-spacing:3px;">`;
+  html += `<div><button class="btn-new" onclick="joinRoom()">参加する</button></div>`;
+  html += `<div style="margin-top:12px;"><button class="choice-btn" onclick="showTitle()">戻る</button></div>`;
+  showModal(html);
+}
+
+function selectSetsOnline(n) { captureName(); selectedSets = n; showOnlineMenu(); }
+
+function setupRefs() {
+  roomRef = db.ref('rooms/' + roomCode);
+  playersRef = roomRef.child('players');
+  statusRef = roomRef.child('status');
+  gameRef = roomRef.child('game');
+  moveRef = roomRef.child('move');
+}
+
+function createRoom() {
+  captureName();
+  if (!myName) { alert('名前を入力してください'); return; }
+  if (!ensureOnline()) return;
+  isHost = true; mySeat = 0; roomCode = genCode();
+  setupRefs();
+  targetSets = selectedSets;
+  roomRef.set({
+    host: myId,
+    status: 'lobby',
+    targetSets: selectedSets,
+    createdAt: Date.now(),
+    players: { [myId]: { name: myName, seat: 0, connected: true } }
+  }).then(() => {
+    playersRef.child(myId).child('connected').onDisconnect().set(false);
+    subscribeRoom();
+    showWaitingRoom();
+  }).catch(e => alert('部屋の作成に失敗しました: ' + e.message));
+}
+
+function joinRoom() {
+  captureName();
+  if (!myName) { alert('名前を入力してください'); return; }
+  if (!ensureOnline()) return;
+  const codeEl = document.getElementById('codeInput');
+  const code = (codeEl ? codeEl.value : '').trim().toUpperCase();
+  if (code.length < 4) { alert('部屋コードを入力してください'); return; }
+  roomCode = code;
+  setupRefs();
+  roomRef.once('value').then(s => {
+    const room = s.val();
+    if (!room) { alert('その部屋は見つかりません'); return; }
+    if (room.status !== 'lobby') { alert('その部屋はすでに開始済みです'); return; }
+    const players = room.players || {};
+    const count = Object.keys(players).length;
+    if (count >= 4) { alert('その部屋は満員です'); return; }
+    isHost = false; mySeat = count;
+    playersRef.child(myId).set({ name: myName, seat: count, connected: true }).then(() => {
+      playersRef.child(myId).child('connected').onDisconnect().set(false);
+      subscribeRoom();
+      showWaitingRoom();
+    });
+  }).catch(e => alert('参加に失敗しました: ' + e.message));
+}
+
+function subscribeRoom() {
+  playersRef.on('value', s => {
+    roomPlayers = s.val() || {};
+    if (!inGame) showWaitingRoom();
+    if (inGame) render();
+    if (isHost) hostCheckAuto();
+  });
+  statusRef.on('value', s => {
+    if (s.val() === 'playing') { online = true; myIndex = mySeat; inGame = true; }
+  });
+  gameRef.on('value', s => {
+    const g = s.val();
+    if (g) applyRemoteGame(g);
+  });
+  if (isHost) {
+    moveRef.on('value', s => {
+      const m = s.val();
+      if (m) hostHandleMove(m);
+    });
+  }
+}
+
+function playerAtSeat(seat) {
+  for (const id in roomPlayers) if (roomPlayers[id].seat === seat) return roomPlayers[id];
+  return null;
+}
+function seatConnected(seat) {
+  const p = playerAtSeat(seat);
+  return p ? p.connected !== false : false;
+}
+
+function showWaitingRoom() {
+  if (inGame) return;
+  const players = Object.values(roomPlayers).sort((a, b) => a.seat - b.seat);
+  let html = `<h2>待機ロビー</h2>`;
+  html += `<p>部屋コード：<span style="color:#ffd700;font-size:1.4em;letter-spacing:3px;">${roomCode}</span></p>`;
+  html += `<p style="font-size:.8em;opacity:.8;">このコードを友達に共有してください</p>`;
+  html += `<div class="result-detail">`;
+  players.forEach(p => {
+    html += `<p>${p.seat + 1}. ${p.name}${p.connected === false ? '（切断）' : ''}${p.seat === mySeat ? ' ←あなた' : ''}</p>`;
+  });
+  html += `</div>`;
+  html += `<p>${players.length} / 4 人</p>`;
+  if (isHost) {
+    const ok = players.length >= 2;
+    html += `<button class="btn-new" ${ok ? '' : 'disabled'} onclick="hostStartOnline()">ゲーム開始</button>`;
+    if (!ok) html += `<p style="font-size:.8em;opacity:.8;">2人以上で開始できます</p>`;
+  } else {
+    html += `<p>ホストの開始を待っています…</p>`;
+  }
+  html += `<div style="margin-top:10px;"><button class="choice-btn" onclick="leaveRoom()">退出</button></div>`;
+  showModal(html);
+}
+
+function hostStartOnline() {
+  if (!isHost) return;
+  const players = Object.values(roomPlayers).sort((a, b) => a.seat - b.seat);
+  NUM_PLAYERS = players.length;
+  NAMES = [];
+  for (let s = 0; s < NUM_PLAYERS; s++) { const p = playerAtSeat(s); NAMES.push(p ? p.name : ('P' + (s + 1))); }
+  online = true; myIndex = mySeat; inGame = true;
+  scores = [0, 0, 0, 0];
+  roundsPlayed = 0;
+  targetSets = selectedSets;
+  scoreHistory = [[0, 0, 0, 0]];
+  statusRef.set('playing');
+  hostStartRound();
+}
+
+function hostStartRound() {
+  deck = createDeck();
+  shuffle(deck);
+  hands = [];
+  for (let i = 0; i < NUM_PLAYERS; i++) hands.push(deck.splice(0, 5));
+  hands.forEach(sortHand);
+  discard = [deck.pop()];
+  justPlayed = null;
+  turn = 0;
+  phase = 'play';
+  currentResult = null;
+  gameFinalFlag = false;
+  if (moveRef) moveRef.remove();
+  publishGame();
+  setTimeout(hostCheckAuto, 700);
+}
+
+function cardsToPlain(arr) {
+  return (arr || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
+}
+
+function publishGame() {
+  if (!gameRef) return;
+  const data = {
+    hands: hands.map(h => cardsToPlain(h)),
+    discard: cardsToPlain(discard),
+    justPlayed: justPlayed ? cardsToPlain(justPlayed) : null,
+    turn: turn, phase: phase,
+    scores: scores.slice(0, NUM_PLAYERS),
+    scoreHistory: scoreHistory,
+    roundsPlayed: roundsPlayed, targetSets: targetSets,
+    numPlayers: NUM_PLAYERS, names: NAMES,
+    result: currentResult || null,
+    final: !!gameFinalFlag,
+    updatedAt: Date.now()
+  };
+  gameRef.set(data);
+}
+
+function applyRemoteGame(g) {
+  online = true; inGame = true; myIndex = mySeat;
+  hands = (g.hands || []).map(h => (h || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker })));
+  discard = (g.discard || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
+  justPlayed = g.justPlayed ? g.justPlayed.map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker })) : null;
+  turn = g.turn || 0;
+  phase = g.phase || 'play';
+  scores = (g.scores || []).slice();
+  while (scores.length < 4) scores.push(0);
+  scoreHistory = g.scoreHistory || [[0, 0, 0, 0]];
+  roundsPlayed = g.roundsPlayed || 0;
+  targetSets = g.targetSets || selectedSets;
+  NUM_PLAYERS = g.numPlayers || hands.length;
+  NAMES = g.names || NAMES;
+  busy = false;
+  selectedIndices.clear();
+
+  if (g.result) {
+    showResultModal(g.result, !!g.final);
+  } else {
+    closeModal();
+    render();
+    if (phase === 'play' && turn === myIndex) setInfo('あなたのターンです。手札を選んで捨札をクリックして出すか、ヤニブを宣言してください。');
+    else if (phase === 'draw' && turn === myIndex) setInfo('山札か、捨札（1つ下の山）から1枚引いてください');
+    else setInfo(`${NAMES[turn]} のターンです…`);
+  }
+}
+
+let lastResultModal = null;
+function showResultModal(summaryHTML, isFinal) {
+  let html = summaryHTML;
+  html += `<div style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">`;
+  if (isFinal) {
+    html += `<button class="btn-new" onclick="leaveRoom()">タイトルへ</button>`;
+  } else {
+    if (roundsPlayed >= 1) html += `<button class="btn-new" onclick="showGraph()">グラフを見る</button>`;
+    if (isHost) {
+      if (roundsPlayed >= targetSets) html += `<button class="btn-new" onclick="hostFinalize()">最終結果を見る</button>`;
+      else html += `<button class="btn-new" onclick="hostNextRound()">次のラウンドへ</button>`;
+    } else {
+      html += `<p style="width:100%;">ホストの操作を待っています…</p>`;
+    }
+  }
+  html += `</div>`;
+  lastResultModal = { html: summaryHTML, isFinal };
+  showModal(html);
+}
+function reopenResult() {
+  if (lastResultModal) showResultModal(lastResultModal.html, lastResultModal.isFinal);
+}
+
+function sendMove(move) {
+  move.by = myId; move.seat = mySeat; move.ts = Date.now();
+  if (isHost) hostHandleMove(move);
+  else if (moveRef) moveRef.set(move);
+}
+
+// 手札から指定カード群をすべて取り除けるか
+function handHasAll(hand, cards) {
+  const tmp = hand.slice();
+  for (const c of cards) {
+    const idx = tmp.findIndex(x => x.suit === c.suit && x.rank === c.rank && !!x.isJoker === !!c.isJoker);
+    if (idx === -1) return false;
+    tmp.splice(idx, 1);
+  }
+  return true;
+}
+function removeCards(hand, cards) {
+  for (const c of cards) {
+    const idx = hand.findIndex(x => x.suit === c.suit && x.rank === c.rank && !!x.isJoker === !!c.isJoker);
+    if (idx !== -1) hand.splice(idx, 1);
+  }
+}
+
+function hostHandleMove(m) {
+  if (!isHost || !m) return;
+  if (phase === 'over') { if (moveRef) moveRef.remove(); return; }
+  if (m.seat !== turn) { if (moveRef) moveRef.remove(); return; }
+
+  if (m.type === 'play') {
+    if (phase !== 'play') { if (moveRef) moveRef.remove(); return; }
+    const cards = (m.cards || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
+    if (!validatePlay(cards) || !handHasAll(hands[turn], cards)) { if (moveRef) moveRef.remove(); return; }
+    justPlayed = cards;
+    removeCards(hands[turn], cards);
+    phase = 'draw';
+    if (moveRef) moveRef.remove();
+    publishGame();
+  } else if (m.type === 'draw') {
+    if (phase !== 'draw') { if (moveRef) moveRef.remove(); return; }
+    let card = null;
+    if (m.source === 'deck') {
+      if (deck.length === 0) reshuffleDeck();
+      card = deck.length > 0 ? deck.pop() : null;
+    } else {
+      const idx = m.index | 0;
+      if (discard && discard.length > 0) {
+        if (discard.length >= 3 && idx !== 0 && idx !== discard.length - 1) { if (moveRef) moveRef.remove(); return; }
+        card = discard.splice(idx, 1)[0];
+      }
+    }
+    if (card) hands[turn].push(card);
+    sortHand(hands[turn]);
+    discard = justPlayed && justPlayed.length ? justPlayed : discard;
+    justPlayed = null;
+    if (moveRef) moveRef.remove();
+    hostAdvanceTurn();
+  } else if (m.type === 'yaniv') {
+    if (phase !== 'play' || handTotal(hands[turn]) > 5) { if (moveRef) moveRef.remove(); return; }
+    if (moveRef) moveRef.remove();
+    hostResolveYaniv(turn);
+  } else {
+    if (moveRef) moveRef.remove();
+  }
+}
+
+function hostAdvanceTurn() {
+  turn = (turn + 1) % NUM_PLAYERS;
+  phase = 'play';
+  publishGame();
+  setTimeout(hostCheckAuto, 700);
+}
+
+// 切断プレイヤーの手番はホストが代行
+function hostCheckAuto() {
+  if (!isHost || !inGame || phase === 'over') return;
+  if (seatConnected(turn)) return;
+  // 全員切断などの暴走防止
+  let anyConnected = false;
+  for (let s = 0; s < NUM_PLAYERS; s++) if (seatConnected(s)) anyConnected = true;
+  if (!anyConnected) return;
+  setTimeout(hostAutoTurn, 600);
+}
+
+function hostAutoTurn() {
+  if (!isHost || phase === 'over' || seatConnected(turn)) return;
+  const seat = turn;
+  if (phase === 'play') {
+    const bestPlay = cpuChoosePlay(hands[seat]);
+    justPlayed = bestPlay.map(idx => hands[seat][idx]);
+    hands[seat] = hands[seat].filter((_, idx) => !bestPlay.includes(idx));
+    phase = 'draw';
+  }
+  if (!justPlayed) { // 念のため
+    hostAdvanceTurn();
+    return;
+  }
+  let card = null;
+  if (discard && discard.length > 0) {
+    const ends = discard.length < 3 ? discard.map((c, k) => k) : [0, discard.length - 1];
+    let bestEnd = -1, bestEndVal = Infinity;
+    for (const idx of ends) { const v = cardValue(discard[idx]); if (v < bestEndVal) { bestEndVal = v; bestEnd = idx; } }
+    if (bestEndVal <= 4) card = discard.splice(bestEnd, 1)[0];
+  }
+  if (!card) { if (deck.length === 0) reshuffleDeck(); card = deck.length > 0 ? deck.pop() : null; }
+  if (card) hands[seat].push(card);
+  sortHand(hands[seat]);
+  discard = justPlayed; justPlayed = null;
+  hostAdvanceTurn();
+}
+
+function hostResolveYaniv(declarer) {
+  const totals = hands.map(h => handTotal(h));
+  const D = totals[declarer];
+  let minOther = Infinity, minIdx = -1;
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    if (i === declarer) continue;
+    if (totals[i] < minOther) { minOther = totals[i]; minIdx = i; }
+  }
+  let html = `<h2>${NAMES[declarer]} がヤニブ宣言！</h2>`;
+  html += `<div class="result-detail">`;
+  for (let i = 0; i < NUM_PLAYERS; i++) {
+    html += `<p><b>${NAMES[i]}</b> — ${totals[i]}点</p><div class="revealed-hand">${hands[i].map(c => renderCard(c)).join('')}</div>`;
+  }
+  html += `</div>`;
+
+  const changes = new Array(NUM_PLAYERS).fill(0);
+  if (D < minOther) {
+    let maxIdx = 0;
+    for (let i = 1; i < NUM_PLAYERS; i++) if (totals[i] > totals[maxIdx]) maxIdx = i;
+    const gain = totals[maxIdx] - D;
+    changes[declarer] += gain; changes[maxIdx] -= gain;
+    html += `<p style="color:#4caf50;font-size:1.2em">${NAMES[declarer]} のヤニブ成功！</p>`;
+    html += `<p>${NAMES[declarer]}: +${gain}点 ／ ${NAMES[maxIdx]}(最高点): -${gain}点</p>`;
+  } else {
+    const diff = D - minOther;
+    const penalty = diff * 20;
+    changes[declarer] -= penalty; changes[minIdx] += penalty;
+    html += `<p style="color:#f44336;font-size:1.2em">${NAMES[declarer]} のヤニブ失敗！（${NAMES[minIdx]} の方が低い）</p>`;
+    html += `<p>${NAMES[declarer]}: -${penalty}点 ／ ${NAMES[minIdx]}: +${penalty}点</p>`;
+  }
+  for (let i = 0; i < NUM_PLAYERS; i++) scores[i] += changes[i];
+  roundsPlayed++;
+  scoreHistory.push(scores.slice());
+  html += `<p style="margin-top:10px">累計 — ` + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ') + `</p>`;
+  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了</p>`;
+
+  phase = 'over';
+  currentResult = html;
+  gameFinalFlag = false;
+  publishGame();
+}
+
+function hostNextRound() {
+  if (!isHost) return;
+  if (roundsPlayed >= targetSets) { hostFinalize(); return; }
+  hostStartRound();
+}
+
+function hostFinalize() {
+  if (!isHost) return;
+  let html = `<h2>ゲーム終了（全${targetSets}セット）</h2>`;
+  const order = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
+  html += `<div class="result-detail">`;
+  order.forEach((o, rank) => { html += `<p>${rank + 1}位　${o.n}：${o.s}点</p>`; });
+  html += `</div><p>お疲れさまでした！</p>`;
+  phase = 'over';
+  currentResult = html;
+  gameFinalFlag = true;
+  publishGame();
+}
+
+function leaveRoom() {
+  try {
+    if (playersRef && myId) playersRef.child(myId).remove();
+    if (playersRef) playersRef.off();
+    if (statusRef) statusRef.off();
+    if (gameRef) gameRef.off();
+    if (moveRef) moveRef.off();
+  } catch (e) {}
+  online = false; isHost = false; inGame = false; roomCode = null; myIndex = 0;
+  roomPlayers = {};
+  showTitle();
+}
+
+showTitle();
 </script>
 </body>
 </html>
