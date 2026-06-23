@@ -1036,10 +1036,16 @@ function publishGame() {
     final: !!gameFinalFlag,
     updatedAt: Date.now()
   };
-  gameRef.set(data);
+  // 配列をJSON文字列で保存（Firebaseは空配列をnull化し配列が壊れるため）
+  gameRef.set({ state: JSON.stringify(data), updatedAt: Date.now() });
 }
 
-function applyRemoteGame(g) {
+function applyRemoteGame(raw) {
+  let g = raw;
+  if (raw && typeof raw.state === 'string') {
+    try { g = JSON.parse(raw.state); } catch (e) { return; }
+  }
+  if (!g || !g.hands) return;
   online = true; inGame = true; myIndex = mySeat;
   hands = (g.hands || []).map(h => (h || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker })));
   discard = (g.discard || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
