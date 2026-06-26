@@ -210,6 +210,10 @@ let currentResult = null; // ホストが配信する結果HTML
 let gameFinalFlag = false;
 let roomPlayers = {};   // id -> {name, seat, connected}
 let db = null, roomRef = null, playersRef = null, statusRef = null, gameRef = null, moveRef = null;
+let pendingAnim = null;       // ホストが次の配信に乗せる移動アニメ情報
+let firstStateApplied = false; // 最初の状態（配り直し）はアニメしない
+let animQueue = [];           // 受信した状態の処理待ち行列
+let animRunning = false;
 
 function createDeck() {
   const d = [];
@@ -949,6 +953,9 @@ function joinRoom() {
 }
 
 function subscribeRoom() {
+  firstStateApplied = false;
+  animQueue = [];
+  animRunning = false;
   playersRef.on('value', s => {
     roomPlayers = s.val() || {};
     if (!inGame) showWaitingRoom();
@@ -1052,8 +1059,10 @@ function publishGame() {
     numPlayers: NUM_PLAYERS, names: NAMES,
     result: currentResult || null,
     final: !!gameFinalFlag,
+    anim: pendingAnim || null,
     updatedAt: Date.now()
   };
+  pendingAnim = null;
   // 配列をJSON文字列で保存（Firebaseは空配列をnull化し配列が壊れるため）
   gameRef.set({ state: JSON.stringify(data), updatedAt: Date.now() });
 }
@@ -1064,6 +1073,30 @@ function applyRemoteGame(raw) {
     try { g = JSON.parse(raw.state); } catch (e) { return; }
   }
   if (!g || !g.hands) return;
+  animQueue.push(g);
+  processAnimQueue();
+}
+
+function processAnimQueue() {
+  if (animRunning || animQueue.length === 0) return;
+  const g = animQueue.shift();
+  const anim = g.anim;
+  const shouldAnim = anim && firstStateApplied && !g.result && inGame && online;
+  if (shouldAnim) {
+    animRunning = true;
+    runAnim(anim, g).then(() => {
+      commitState(g);
+      animRunning = false;
+      processAnimQueue();
+    });
+  } else {
+    commitState(g);
+    processAnimQueue();
+  }
+}
+
+// 状態を実際に反映して描画
+function commitState(g) {
   online = true; inGame = true; myIndex = mySeat;
   hands = (g.hands || []).map(h => (h || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker })));
   discard = (g.discard || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
@@ -1079,6 +1112,7 @@ function applyRemoteGame(raw) {
   NAMES = g.names || NAMES;
   busy = false;
   selectedIndices.clear();
+  firstStateApplied = true;
 
   if (g.result) {
     showResultModal(g.result, !!g.final);
@@ -1089,6 +1123,62 @@ function applyRemoteGame(raw) {
     else if (phase === 'draw' && turn === myIndex) setInfo('山札か、捨札（1つ下の山）から1枚引いてください');
     else setInfo(`${NAMES[turn]} のターンです…`);
   }
+}
+
+// 自分を下にした時の、あるプレイヤーの画面上の席
+function screenSeatForPlayer(idx) {
+  if (idx === myIndex) return 0;
+  const order = [];
+  for (let k = 0; k < NUM_PLAYERS; k++) order.push((myIndex + k) % NUM_PLAYERS);
+  const otherSeats = CPU_SEAT_LAYOUT[NUM_PLAYERS - 1] || [];
+  const k = order.indexOf(idx);
+  return otherSeats[k - 1];
+}
+function handPointForPlayer(idx) {
+  const seat = screenSeatForPlayer(idx);
+  const el = seat === 0 ? document.getElementById('player-hand') : document.getElementById('hand-' + seat);
+  let r = el && el.getBoundingClientRect();
+  if (!r || r.width === 0) r = document.getElementById('seat-' + seat).getBoundingClientRect();
+  return { left: r.left + r.width / 2 - 30, top: r.top + r.height / 2 - 42 };
+}
+function discardPoint() {
+  const r = document.getElementById('discard-pile').getBoundingClientRect();
+  return { left: r.left + 4, top: r.top + 4 };
+}
+function deckPoint() {
+  const r = document.getElementById('draw-pile').getBoundingClientRect();
+  return { left: r.left, top: r.top };
+}
+// 新しい手札にあって古い手札に無いカード（＝引いたカード）
+function diffNewCard(oldH, newH) {
+  const tmp = oldH.slice();
+  for (const c of newH) {
+    const i = tmp.findIndex(x => x.suit === c.suit && x.rank === c.rank && !!x.isJoker === !!c.isJoker);
+    if (i >= 0) tmp.splice(i, 1);
+    else return { suit: c.suit, rank: c.rank, isJoker: !!c.isJoker };
+  }
+  return null;
+}
+
+// 移動アニメーション（commit前に呼ぶ。現在のDOM＝直前の状態を始点に使う）
+function runAnim(anim, g) {
+  try {
+    if (anim.k === 'play') {
+      const cards = anim.cards || [];
+      const src = handPointForPlayer(anim.seat);
+      const dst = discardPoint();
+      return Promise.all(cards.map(c => flyCard(src, dst, c, FLY_MS, false)));
+    } else if (anim.k === 'draw') {
+      const seat = anim.seat;
+      const drawn = anim.card || diffNewCard(hands[seat] || [], (g.hands && g.hands[seat]) || []);
+      const src = anim.fromDeck ? deckPoint() : discardPoint();
+      const dst = handPointForPlayer(seat);
+      // 山札からは裏向き（自分が引いた分は表向き）。捨札からは公開済みなので表向き
+      const faceDown = (!!anim.fromDeck && seat !== myIndex) || !drawn;
+      return flyCard(src, dst, drawn || { suit: '♠', rank: 'A', isJoker: false }, FLY_MS, faceDown);
+    }
+  } catch (e) {}
+  return Promise.resolve();
 }
 
 let lastResultModal = null;
@@ -1149,6 +1239,7 @@ function hostHandleMove(m) {
     justPlayed = cards;
     removeCards(hands[turn], cards);
     phase = 'draw';
+    pendingAnim = { k: 'play', seat: m.seat, cards: cardsToPlain(cards) };
     if (moveRef) moveRef.remove();
     publishGame();
   } else if (m.type === 'draw') {
@@ -1168,6 +1259,7 @@ function hostHandleMove(m) {
     sortHand(hands[turn]);
     discard = justPlayed && justPlayed.length ? justPlayed : discard;
     justPlayed = null;
+    pendingAnim = { k: 'draw', seat: turn, fromDeck: (m.source === 'deck'), card: card ? cardsToPlain([card])[0] : null };
     if (moveRef) moveRef.remove();
     hostAdvanceTurn();
   } else if (m.type === 'yaniv') {
@@ -1220,6 +1312,7 @@ function hostAutoTurn() {
   if (!card) { if (deck.length === 0) reshuffleDeck(); card = deck.length > 0 ? deck.pop() : null; }
   if (card) hands[seat].push(card);
   sortHand(hands[seat]);
+  pendingAnim = { k: 'play', seat: seat, cards: cardsToPlain(justPlayed) };
   discard = justPlayed; justPlayed = null;
   hostAdvanceTurn();
 }
