@@ -195,6 +195,7 @@ let phase;          // 'play' | 'draw' | 'cpu' | 'over'
 let busy = false;
 let selectedIndices = new Set();
 let scores = [0, 0, 0, 0];
+let nextStartPlayer = 0; // 次ラウンドの先行（前ラウンドの敗者）。新規ゲームは0
 
 // ===== オンライン用の状態 =====
 let online = false;     // オンライン対戦中か
@@ -596,6 +597,18 @@ function declareYaniv() {
   resolveYaniv(myIndex);
 }
 
+// このラウンドの敗者（最も点を失ったプレイヤー。失点者がいなければ最高点の手札の人）
+function computeRoundLoser(changes, totals) {
+  let idx = 0, worst = Infinity;
+  for (let i = 0; i < NUM_PLAYERS; i++) if (changes[i] < worst) { worst = changes[i]; idx = i; }
+  if (worst >= 0) {
+    let mx = 0;
+    for (let i = 1; i < NUM_PLAYERS; i++) if (totals[i] > totals[mx]) mx = i;
+    idx = mx;
+  }
+  return idx;
+}
+
 // オフライン用ヤニブ判定（結果モーダル表示）
 function resolveYaniv(declarer) {
   phase = 'over';
@@ -641,10 +654,11 @@ function resolveYaniv(declarer) {
   }
 
   for (let i = 0; i < NUM_PLAYERS; i++) scores[i] += changes[i];
+  nextStartPlayer = computeRoundLoser(changes, totals);
   roundsPlayed++;
   scoreHistory.push(scores.slice());
   html += `<p style="margin-top:10px">累計 — ` + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ') + `</p>`;
-  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了</p>`;
+  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了（次の先行：${NAMES[nextStartPlayer]}）</p>`;
   html += `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">`;
   html += `<button class="btn-new" onclick="showGraph()">次へ</button>`;
   if (roundsPlayed < targetSets) {
@@ -710,6 +724,7 @@ function startNewGame() {
   roundsPlayed = 0;
   targetSets = selectedSets;
   scoreHistory = [[0, 0, 0, 0]];
+  nextStartPlayer = 0;
   closeModal();
   startGame(selectedCpuCount);
 }
@@ -821,10 +836,12 @@ function startGame(numCpus) {
   justPlayed = null;
   selectedIndices.clear();
   busy = false;
-  turn = 0;
+  // 先行は前ラウンドの敗者（新規ゲームは0=あなた）。advanceTurnで先行へ進めCPUなら自動実行
+  const startP = Math.min(Math.max(nextStartPlayer, 0), NUM_PLAYERS - 1);
+  turn = (startP - 1 + NUM_PLAYERS) % NUM_PLAYERS;
   phase = 'play';
-  setInfo('あなたのターンです。手札を選んで捨札をクリックして出すか、ヤニブを宣言してください。');
   render();
+  advanceTurn();
 }
 
 /* =========================================================
@@ -996,6 +1013,7 @@ function hostStartOnline() {
   roundsPlayed = 0;
   targetSets = selectedSets;
   scoreHistory = [[0, 0, 0, 0]];
+  nextStartPlayer = 0;
   statusRef.set('playing');
   hostStartRound();
 }
@@ -1008,7 +1026,7 @@ function hostStartRound() {
   hands.forEach(sortHand);
   discard = [deck.pop()];
   justPlayed = null;
-  turn = 0;
+  turn = Math.min(Math.max(nextStartPlayer, 0), NUM_PLAYERS - 1);
   phase = 'play';
   currentResult = null;
   gameFinalFlag = false;
@@ -1237,10 +1255,11 @@ function hostResolveYaniv(declarer) {
     html += `<p>${NAMES[declarer]}: -${penalty}点 ／ ${NAMES[minIdx]}: +${penalty}点</p>`;
   }
   for (let i = 0; i < NUM_PLAYERS; i++) scores[i] += changes[i];
+  nextStartPlayer = computeRoundLoser(changes, totals);
   roundsPlayed++;
   scoreHistory.push(scores.slice());
   html += `<p style="margin-top:10px">累計 — ` + NAMES.map((n, i) => `${n}: ${scores[i]}`).join(' ／ ') + `</p>`;
-  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了</p>`;
+  html += `<p>ラウンド ${roundsPlayed} / ${targetSets} 終了（次の先行：${NAMES[nextStartPlayer]}）</p>`;
 
   phase = 'over';
   currentResult = html;
