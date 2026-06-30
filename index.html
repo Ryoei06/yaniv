@@ -244,6 +244,40 @@ function sortHand(hand) {
 
 function rankIndex(c) { return c.isJoker ? -1 : RANKS.indexOf(c.rank); }
 
+// 出したカードを捨札に並べる順序を決める。
+// 階段（連番）はジョーカーを連番上の正しい位置に挿入し、端だけが取得対象になるようにする。
+function arrangePlay(cards) {
+  if (cards.length < 3) return cards.slice();
+  const nonJokers = cards.filter(c => !c.isJoker);
+  // 同じランクの組（ジョーカー無し）は並び替え不要
+  if (nonJokers.length >= 2 && nonJokers.every(c => c.rank === nonJokers[0].rank)) return cards.slice();
+  // 同じマークなら階段とみなして並べ替え
+  if (nonJokers.length >= 1 && new Set(nonJokers.map(c => c.suit)).size === 1) return orderRun(cards);
+  return cards.slice();
+}
+function orderRun(cards) {
+  const nonJokers = cards.filter(c => !c.isJoker).sort((a, b) => rankIndex(a) - rankIndex(b));
+  const jokers = cards.filter(c => c.isJoker);
+  const length = cards.length;
+  if (nonJokers.length === 0) return cards.slice();
+  const minR = rankIndex(nonJokers[0]);
+  const maxR = rankIndex(nonJokers[nonJokers.length - 1]);
+  // 全ての非ジョーカーを含み、盤面(0..12)に収まる連番の開始位置を選ぶ
+  let start = -1;
+  for (let s = Math.max(0, maxR - length + 1); s <= Math.min(minR, 13 - length); s++) { start = s; break; }
+  if (start === -1) return cards.slice();
+  const byRank = {};
+  nonJokers.forEach(c => { byRank[rankIndex(c)] = c; });
+  const result = [];
+  let ji = 0;
+  for (let pos = start; pos < start + length; pos++) {
+    if (byRank[pos]) result.push(byRank[pos]);
+    else if (ji < jokers.length) result.push(jokers[ji++]);
+  }
+  while (ji < jokers.length) result.push(jokers[ji++]);
+  return result;
+}
+
 function cardFaceHTML(c, extraClass, attrs) {
   const cls = c.isJoker ? 'joker' : SUIT_COLORS[c.suit];
   return `<div class="card ${cls} ${extraClass || ''}" ${attrs || ''}><span class="rank">${c.rank}</span><span class="suit">${c.isJoker ? '★' : c.suit}</span></div>`;
@@ -404,9 +438,11 @@ function playCards() {
 
   // ===== オフライン：飛行アニメーション付き =====
   const handEls = document.querySelectorAll('#player-hand .card');
-  const sourceRects = indices.map(i => handEls[i].getBoundingClientRect());
+  const rectOf = new Map();
+  indices.forEach((i, k) => rectOf.set(hands[0][i], handEls[i].getBoundingClientRect()));
 
-  justPlayed = cards;
+  const ordered = arrangePlay(cards); // 階段はジョーカーを正しい位置に並べる
+  justPlayed = ordered;
   hands[0] = hands[0].filter((_, i) => !selectedIndices.has(i));
   selectedIndices.clear();
   phase = 'draw';
@@ -417,10 +453,11 @@ function playCards() {
   const pg = document.getElementById('played-group');
   const destEls = pg ? [...pg.children] : [];
   if (pg) pg.style.visibility = 'hidden';
-  let pending = cards.length;
-  cards.forEach((c, k) => {
+  let pending = ordered.length;
+  ordered.forEach((c, k) => {
     const dest = destEls[k].getBoundingClientRect();
-    flyCard(sourceRects[k], dest, c, FLY_MS).then(() => {
+    const src = rectOf.get(c) || handEls[0].getBoundingClientRect();
+    flyCard(src, dest, c, FLY_MS).then(() => {
       if (--pending === 0) {
         if (pg) pg.style.visibility = 'visible';
         busy = false;
@@ -579,7 +616,7 @@ function cpuTakeTurn(i) {
 
   const playFlies = played.map((c, k) => flyCard(backRects[k] || backRects[0] || discRect, discDest, c, FLY_MS, false));
   Promise.all(playFlies).then(() => {
-    discard = played;
+    discard = arrangePlay(played);
     render();
     const after = () => {
       if (drawnCard) hands[i].push(drawnCard);
@@ -1237,10 +1274,10 @@ function hostHandleMove(m) {
     if (phase !== 'play') { if (moveRef) moveRef.remove(); return; }
     const cards = (m.cards || []).map(c => ({ suit: c.suit, rank: c.rank, isJoker: !!c.isJoker }));
     if (!validatePlay(cards) || !handHasAll(hands[turn], cards)) { if (moveRef) moveRef.remove(); return; }
-    justPlayed = cards;
     removeCards(hands[turn], cards);
+    justPlayed = arrangePlay(cards); // 階段はジョーカーを正しい位置に並べる
     phase = 'draw';
-    pendingAnim = { k: 'play', seat: m.seat, cards: cardsToPlain(cards) };
+    pendingAnim = { k: 'play', seat: m.seat, cards: cardsToPlain(justPlayed) };
     if (moveRef) moveRef.remove();
     publishGame();
   } else if (m.type === 'draw') {
@@ -1313,8 +1350,9 @@ function hostAutoTurn() {
   if (!card) { if (deck.length === 0) reshuffleDeck(); card = deck.length > 0 ? deck.pop() : null; }
   if (card) hands[seat].push(card);
   sortHand(hands[seat]);
-  pendingAnim = { k: 'play', seat: seat, cards: cardsToPlain(justPlayed) };
-  discard = justPlayed; justPlayed = null;
+  const orderedAuto = arrangePlay(justPlayed);
+  pendingAnim = { k: 'play', seat: seat, cards: cardsToPlain(orderedAuto) };
+  discard = orderedAuto; justPlayed = null;
   hostAdvanceTurn();
 }
 
