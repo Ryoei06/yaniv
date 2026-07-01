@@ -9,6 +9,11 @@
 body { font-family: 'Segoe UI', sans-serif; background: #1a6b3c; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; user-select: none; }
 h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
 
+#topnav { width: 100%; display: flex; justify-content: center; gap: 6px; padding: 8px; border-bottom: 1px solid rgba(255,255,255,.15); }
+.nav-item { background: transparent; color: #fff; opacity: .65; padding: 6px 18px; font-size: .95em; border-radius: 6px; }
+.nav-item:hover { opacity: 1; }
+.nav-item.active { opacity: 1; color: #ffd700; }
+
 #game-view { display: flex; flex-direction: column; align-items: center; width: 100%; flex: 1; }
 #home { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; padding: 20px; }
 .home-card { background: transparent; border-radius: 18px; padding: 40px 44px; text-align: center; max-width: 90vw; }
@@ -122,6 +127,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
+
+<nav id="topnav">
+  <button class="nav-item active" data-nav="home" onclick="navHome()">ホーム</button>
+  <button class="nav-item" data-nav="ranking" onclick="navRanking()">ランキング</button>
+  <button class="nav-item" data-nav="profile" onclick="navProfile()">プロフィール</button>
+</nav>
 
 <div id="home">
   <div class="home-card">
@@ -837,7 +848,22 @@ function closeModal() { document.getElementById('modal').style.display = 'none';
 function showHome() {
   document.getElementById('game-view').style.display = 'none';
   document.getElementById('home').style.display = 'flex';
+  setNav('home');
   closeModal();
+}
+
+// 上部ナビゲーション（ランキング・プロフィールは中身未実装のプレースホルダー）
+function setNav(name) {
+  document.querySelectorAll('#topnav .nav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === name));
+}
+function navHome() { showTitle(); }
+function navRanking() {
+  setNav('ranking');
+  showModal(`<h2>ランキング</h2><p>準備中です。</p><button class="btn-new" onclick="showHome()">戻る</button>`);
+}
+function navProfile() {
+  setNav('profile');
+  showModal(`<h2>プロフィール</h2><p>準備中です。</p><button class="btn-new" onclick="showHome()">戻る</button>`);
 }
 function showBoard() {
   document.getElementById('home').style.display = 'none';
