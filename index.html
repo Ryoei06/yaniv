@@ -846,40 +846,85 @@ function showBoard() {
 }
 
 // ルール説明画面：上部にイラスト、その下にルール本文
-function rulesImage() {
-  const card = (x, y, rot, rank, suit, color) =>
-    `<g transform="translate(${x} ${y}) rotate(${rot})"><rect x="-22" y="-31" width="44" height="62" rx="6" fill="#fff" stroke="#d0d0d0"/><text x="0" y="-11" font-size="15" font-weight="bold" fill="${color}" text-anchor="middle" font-family="sans-serif">${rank}</text><text x="0" y="13" font-size="20" fill="${color}" text-anchor="middle">${suit}</text></g>`;
-  let s = `<svg viewBox="0 0 500 225" width="100%" style="max-width:460px;display:block;margin:0 auto;">`;
-  s += `<rect x="0" y="0" width="500" height="225" rx="14" fill="#12692f"/>`;
-  s += `<text x="205" y="34" fill="#cfe8d6" font-size="12" text-anchor="middle">山札</text>`;
-  s += `<text x="295" y="34" fill="#cfe8d6" font-size="12" text-anchor="middle">捨札</text>`;
-  s += `<g transform="translate(205 80)"><rect x="-22" y="-31" width="44" height="62" rx="6" fill="#24408a" stroke="#1a2f66"/><text x="0" y="9" font-size="24" fill="rgba(255,255,255,.35)" text-anchor="middle">🂠</text></g>`;
-  s += card(295, 80, 0, '7', '♦', '#c0392b');
-  const hand = [['A', '♠', '#222'], ['4', '♥', '#c0392b'], ['JK', '★', '#8b00c8'], ['6', '♣', '#222'], ['K', '♦', '#c0392b']];
-  hand.forEach((c, i) => { s += card(250 + (i - 2) * 40, 175 - Math.abs(i - 2) * 3, (i - 2) * 11, c[0], c[1], c[2]); });
-  s += `<text x="250" y="216" fill="#cfe8d6" font-size="11" text-anchor="middle">あなたの手札（合計を5点以下にしてヤニブ！）</text>`;
-  s += `</svg>`;
-  return s;
+// ルール図用の共通パーツ
+function rCard(x, y, rot, rank, suit, color) {
+  return `<g transform="translate(${x} ${y}) rotate(${rot})"><rect x="-22" y="-31" width="44" height="62" rx="6" fill="#fff" stroke="#d0d0d0"/><text x="0" y="-11" font-size="15" font-weight="bold" fill="${color}" text-anchor="middle" font-family="sans-serif">${rank}</text><text x="0" y="13" font-size="20" fill="${color}" text-anchor="middle">${suit}</text></g>`;
+}
+function rBack(x, y) {
+  return `<g transform="translate(${x} ${y})"><rect x="-22" y="-31" width="44" height="62" rx="6" fill="#24408a" stroke="#1a2f66"/><text x="0" y="9" font-size="24" fill="rgba(255,255,255,.35)" text-anchor="middle">🂠</text></g>`;
+}
+function rTxt(x, y, t, color, size, weight) {
+  return `<text x="${x}" y="${y}" fill="${color || '#cfe8d6'}" font-size="${size || 12}" text-anchor="middle"${weight ? ` font-weight="${weight}"` : ''}>${t}</text>`;
+}
+function rSvg(inner, h) {
+  h = h || 180;
+  return `<svg viewBox="0 0 500 ${h}" width="100%" style="max-width:460px;display:block;margin:0 auto;"><rect x="0" y="0" width="500" height="${h}" rx="14" fill="#12692f"/>${inner}</svg>`;
+}
+
+// ページごとの関連イラスト
+function rulesImage(page) {
+  const R = '#c0392b', B = '#222', P = '#8b00c8', G = '#ffd700';
+  if (page === 1) { // 準備・手番：場のセット
+    let s = rTxt(205, 34, '山札') + rTxt(295, 34, '捨札');
+    s += rBack(205, 80) + rCard(295, 80, 0, '7', '♦', R);
+    const hand = [['A', '♠', B], ['4', '♥', R], ['JK', '★', P], ['6', '♣', B], ['K', '♦', R]];
+    hand.forEach((c, i) => { s += rCard(250 + (i - 2) * 40, 175 - Math.abs(i - 2) * 3, (i - 2) * 11, c[0], c[1], c[2]); });
+    s += rTxt(250, 216, '各自5枚・山札や捨札の端から1枚補充');
+    return rSvg(s, 225);
+  }
+  if (page === 2) { // 出せる組み合わせ
+    let s = rTxt(88, 38, '① 1枚', G, 13, 'bold');
+    s += rCard(88, 95, 0, '8', '♥', R);
+    s += rTxt(232, 38, '② 同じ数字', G, 13, 'bold');
+    s += rCard(212, 95, -6, '8', '♠', B) + rCard(252, 95, 6, '8', '♦', R);
+    s += rTxt(398, 38, '③ 連番（階段）', G, 13, 'bold');
+    s += rCard(362, 95, 0, '4', '♣', B) + rCard(398, 95, 0, 'JK', '★', P) + rCard(434, 95, 0, '6', '♣', B);
+    s += rTxt(250, 150, 'ジョーカーは連番の好きな数字の代わりに使える');
+    return rSvg(s, 168);
+  }
+  if (page === 3) { // 宣言・得点
+    let s = `<rect x="150" y="24" width="200" height="30" rx="15" fill="${G}"/>`;
+    s += `<text x="250" y="44" fill="#222" font-size="15" font-weight="bold" text-anchor="middle">ヤニブ！</text>`;
+    const hand = [['A', '♠', B], ['2', '♥', R], ['JK', '★', P], ['2', '♦', R]];
+    hand.forEach((c, i) => { s += rCard(250 + (i - 1.5) * 42, 120, (i - 1.5) * 10, c[0], c[1], c[2]); });
+    s += rTxt(250, 172, '合計5点以下で宣言 → 一番低ければ勝ち', G, 13, 'bold');
+    return rSvg(s, 190);
+  }
+  if (page === 4) { // 連戦・順位
+    let s = `<rect x="185" y="95" width="55" height="55" fill="#c0c0c0"/>`;
+    s += `<rect x="245" y="70" width="55" height="80" fill="${G}"/>`;
+    s += `<rect x="305" y="115" width="55" height="35" fill="#cd7f32"/>`;
+    s += rTxt(212, 128, '2位', '#222', 14, 'bold') + rTxt(272, 120, '1位', '#222', 15, 'bold') + rTxt(332, 138, '3位', '#fff', 13, 'bold');
+    s += `<text x="272" y="58" font-size="26" text-anchor="middle">🏆</text>`;
+    s += rTxt(250, 172, 'セットを重ね、累計スコアで最終順位を決定', G, 13, 'bold');
+    return rSvg(s, 190);
+  }
+  // page 0：目的・カードの点数
+  let s = rTxt(250, 32, 'カードの点数', G, 14, 'bold');
+  const vals = [['A', '♠', B, '1点'], ['10', '♦', R, '10点'], ['K', '♣', B, '13点'], ['JK', '★', P, '0点']];
+  vals.forEach((c, i) => { const x = 92 + i * 106; s += rCard(x, 88, 0, c[0], c[1], c[2]) + rTxt(x, 142, c[3], G, 14, 'bold'); });
+  s += rTxt(250, 168, '手札の合計を5点以下にしてヤニブ！');
+  return rSvg(s, 182);
 }
 
 // ルール本文をページ（ブロック）ごとに分割
 function rulesPages() {
   const p = [];
   // 1: 目的と点数（イラスト付き）
-  p.push(rulesImage() +
+  p.push(rulesImage(0) +
     `<h3>ゲームの目的</h3>` +
     `<p>手札の合計点をできるだけ低くし、<b>5点以下</b>で「ヤニブ」を宣言して相手より低くすると勝ちです。</p>` +
     `<h3>カードの点数</h3>` +
     `<ul><li>A＝1点、2〜10＝数字どおり</li><li>J＝11点／Q＝12点／K＝13点</li><li>ジョーカー＝0点</li></ul>`);
   // 2: 準備と手番
-  p.push(
+  p.push(rulesImage(1) +
     `<h3>準備</h3>` +
     `<ul><li>ジョーカー2枚を含む54枚を使用。各プレイヤーに5枚ずつ配ります。</li><li>残りは山札。一番上を1枚めくって公開し、最初の捨札にします。</li></ul>` +
     `<h3>手番でできること</h3>` +
     `<p>スタートプレイヤーから時計回り。自分の番では次のどちらかを行います。</p>` +
     `<p><b>① 通常のプレイ</b>（カードを出す→1枚補充）<br><b>② ヤニブの宣言</b></p>`);
   // 3: 出せる組み合わせと補充
-  p.push(
+  p.push(rulesImage(2) +
     `<h3>① 出せる組み合わせ</h3>` +
     `<ul><li>好きなカード1枚</li><li>同じランク（数字）の2枚以上</li><li>同じマークの連番3枚以上（階段）</li></ul>` +
     `<p class="note">連番ではジョーカーを好きな数字の代わりに使えます。ただし<b>KとAはつながりません</b>。</p>` +
@@ -887,14 +932,14 @@ function rulesPages() {
     `<p>山札の一番上、または直前に場に出ていた捨札の端から1枚を取ります。3枚以上出ていたときは<b>両端のどちらか</b>だけ取れます。</p>` +
     `<div class="ex">例）<b>2・4・ジョーカー</b>で階段を作ると、ジョーカーは3の役割で中央に並びます。相手が取れるのは<b>2・4・山札</b>のみで、中央のジョーカーは取れません。</div>`);
   // 4: 宣言と得点
-  p.push(
+  p.push(rulesImage(3) +
     `<h3>② ヤニブの宣言</h3>` +
     `<p>カードを出す前に、手札の合計が<b>5点以下</b>なら宣言できます。宣言するとラウンド終了、全員が手札を公開します。</p>` +
     `<h3>得点（ラウンドごと）</h3>` +
     `<ul><li><b>宣言者が最小（同点を含む）＝成功</b>：最も合計点が高い人との点差を獲得し、その最高点の人が同じ点を失います。<span class="note">（同点でも宣言者の勝ち）</span></li>` +
     `<li><b>宣言者より低い人がいた＝失敗（ヤニブ返し）</b>：宣言者は「差×20点」を失い、最も低い人が同じ点を得ます。</li></ul>`);
   // 5: 連戦とその他
-  p.push(
+  p.push(rulesImage(4) +
     `<h3>連戦（セット）</h3>` +
     `<ul><li>最初にセット数（1／3／5／10）を選び、累計スコアで競います。</li><li>各ラウンドの敗者が次のラウンドの先行になります。</li><li>全セット終了後に最終順位を表示します。</li></ul>` +
     `<h3>その他</h3>` +
