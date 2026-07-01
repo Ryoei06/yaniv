@@ -542,43 +542,135 @@ function advanceTurn() {
   }
 }
 
-function cpuChoosePlay(hand) {
-  let bestPlay = [0], bestValue = -1;
-  for (let i = 0; i < hand.length; i++) {
-    const v = cardValue(hand[i]);
-    if (v > bestValue) { bestValue = v; bestPlay = [i]; }
+/* =========================================================
+   CPU 思考ルーチン（難易度別）
+   弱い(weak)  : 高い単札を1枚出すだけ・低札のみ拾う・即ヤニブ
+   普通(normal): 枚数削減＋コンボ温存で出す・コンボ/低札を拾う・慎重宣言
+   強い(strong): 普通＋より強い評価・相手手札数から推定して安全に宣言
+   ※ 相手の手札の「枚数」だけ参照（中身は見ない）＝イカサマ無し
+   ========================================================= */
+let cpuDifficulty = 'normal';
+
+// 手札から可能な合法プレイ（出せる組み合わせ）を全列挙。各要素は手札indexの配列
+function cpuEnumeratePlays(hand) {
+  const plays = [];
+  for (let i = 0; i < hand.length; i++) plays.push([i]); // 単札
+  // 同じランクの組
+  const byRank = {};
+  hand.forEach((c, i) => { if (!c.isJoker) (byRank[c.rank] = byRank[c.rank] || []).push(i); });
+  for (const r in byRank) {
+    const g = byRank[r];
+    if (g.length >= 2) plays.push(g.slice());
+    if (g.length >= 3) for (let a = 0; a < g.length; a++) for (let b = a + 1; b < g.length; b++) plays.push([g[a], g[b]]);
   }
-  for (let i = 0; i < hand.length; i++) {
-    for (let j = i + 1; j < hand.length; j++) {
-      if (!hand[i].isJoker && !hand[j].isJoker && hand[i].rank === hand[j].rank) {
-        const v = cardValue(hand[i]) + cardValue(hand[j]);
-        if (v > bestValue) { bestValue = v; bestPlay = [i, j]; }
-      }
-    }
-  }
+  // 同じマークの階段（ジョーカーで穴埋め可、K-Aはつながらない）
+  const jokers = [];
+  hand.forEach((c, i) => { if (c.isJoker) jokers.push(i); });
   const bySuit = {};
-  hand.forEach((c, i) => {
-    if (!c.isJoker) { (bySuit[c.suit] = bySuit[c.suit] || []).push({card: c, idx: i}); }
-  });
+  hand.forEach((c, i) => { if (!c.isJoker) { (bySuit[c.suit] = bySuit[c.suit] || {})[rankIndex(c)] = i; } });
   for (const suit in bySuit) {
-    const cards = bySuit[suit].sort((a, b) => rankIndex(a.card) - rankIndex(b.card));
-    for (let start = 0; start < cards.length - 2; start++) {
-      for (let end = start + 2; end < cards.length; end++) {
-        const run = cards.slice(start, end + 1);
-        const minR = rankIndex(run[0].card), maxR = rankIndex(run[run.length - 1].card);
-        if (maxR - minR === run.length - 1) {
-          const v = run.reduce((s, r) => s + cardValue(r.card), 0);
-          if (v > bestValue) { bestValue = v; bestPlay = run.map(r => r.idx); }
-        }
+    const m = bySuit[suit];
+    const maxLen = Math.min(13, Object.keys(m).length + jokers.length);
+    for (let L = 3; L <= maxLen; L++) {
+      for (let start = 0; start + L <= 13; start++) {
+        const held = []; let need = 0;
+        for (let p = start; p < start + L; p++) { if (m[p] !== undefined) held.push(m[p]); else need++; }
+        if (held.length >= 1 && need <= jokers.length) plays.push(held.concat(jokers.slice(0, need)));
       }
     }
   }
-  return bestPlay;
+  return plays;
+}
+
+// 2枚以上のプレイで捨てられる最大点（コンボの潜在力）
+function cpuComboPotential(cards) {
+  let best = 0;
+  for (const p of cpuEnumeratePlays(cards)) if (p.length >= 2) {
+    const v = p.reduce((s, i) => s + cardValue(cards[i]), 0);
+    if (v > best) best = v;
+  }
+  return best;
+}
+
+// 手札の「悪さ」（低いほど良い）。5点以下は宣言可能で非常に良い
+function cpuHandBadness(cards) {
+  const total = cards.reduce((s, c) => s + cardValue(c), 0);
+  if (total <= 5) return total - 50;
+  return total + cards.length * 2 - cpuComboPotential(cards) * 0.5;
+}
+// 山札から平均的なカード(約6点・コンボにならない)を引いた想定の悪さ
+function cpuDeckBadness(cards) {
+  const total = cards.reduce((s, c) => s + cardValue(c), 0) + 6;
+  const count = cards.length + 1;
+  if (total <= 5) return total - 50;
+  return total + count * 2 - cpuComboPotential(cards) * 0.5;
+}
+
+function cpuPickableEnds(disc) {
+  if (!disc || disc.length === 0) return [];
+  if (disc.length < 3) return disc.map((c, i) => i);
+  return [0, disc.length - 1];
+}
+
+// 出すカードを選ぶ → 手札indexの配列
+function cpuPlay(hand, diff) {
+  if (hand.length === 0) return [0];
+  if (diff === 'weak') {
+    let bi = 0;
+    for (let i = 1; i < hand.length; i++) if (cardValue(hand[i]) > cardValue(hand[bi])) bi = i;
+    return [bi];
+  }
+  const plays = cpuEnumeratePlays(hand);
+  let best = plays[0], bestScore = -Infinity;
+  for (const p of plays) {
+    const removed = p.reduce((s, i) => s + cardValue(hand[i]), 0);
+    const rest = hand.filter((_, i) => !p.includes(i));
+    let score = removed + (p.length - 1) * 6 - cpuHandBadness(rest);
+    if (diff === 'strong') score += (p.length - 1) * 3 - cpuHandBadness(rest) * 0.3;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return best;
+}
+
+// 補充元を選ぶ → {source:'deck'} か {source:'discard', index}
+function cpuDraw(hand, diff, disc) {
+  const ends = cpuPickableEnds(disc);
+  if (diff === 'weak') {
+    let bi = -1, bv = Infinity;
+    for (const idx of ends) { const v = cardValue(disc[idx]); if (v < bv) { bv = v; bi = idx; } }
+    return (bi >= 0 && bv <= 3) ? { source: 'discard', index: bi } : { source: 'deck' };
+  }
+  let bestSource = { source: 'deck' }, bestBad = cpuDeckBadness(hand);
+  const baseCombo = cpuComboPotential(hand);
+  for (const idx of ends) {
+    const c = disc[idx];
+    const nh = hand.concat([c]);
+    const gain = cpuComboPotential(nh) - baseCombo;
+    const bad = cpuHandBadness(nh) - gain * (diff === 'strong' ? 1.0 : 0.7);
+    if (bad < bestBad) { bestBad = bad; bestSource = { source: 'discard', index: idx }; }
+  }
+  return bestSource;
+}
+
+// ヤニブ宣言すべきか（相手の手札枚数だけを参考にリスク判断）
+function shouldDeclareYaniv(seat, diff) {
+  const total = handTotal(hands[seat]);
+  if (total > 5) return false;
+  if (diff === 'weak') return true;
+  let minOppCards = Infinity;
+  for (let p = 0; p < NUM_PLAYERS; p++) if (p !== seat) minOppCards = Math.min(minOppCards, (hands[p] || []).length);
+  if (diff === 'normal') {
+    if (minOppCards <= 2 && total > 3) return false; // 相手が少枚数で自分が4-5点なら見送り
+    return true;
+  }
+  // strong: 3点以下は宣言。4-5点は相手が3枚以上（＝まだヤニブから遠い）のときだけ宣言してアサフを避ける
+  if (total <= 3) return true;
+  return minOppCards >= 3;
 }
 
 function cpuTakeTurn(i) {
   if (phase === 'over') return;
-  if (handTotal(hands[i]) <= 5) { resolveYaniv(i); return; }
+  if (shouldDeclareYaniv(i, cpuDifficulty)) { resolveYaniv(i); return; }
 
   busy = true;
   const seat = seatOf[i];
@@ -591,24 +683,18 @@ function cpuTakeTurn(i) {
   const handDest = { left: hr.left + hr.width / 2 - 30, top: hr.top + hr.height / 2 - 42 };
   const discDest = { left: discRect.left + 4, top: discRect.top + 4 };
 
-  const bestPlay = cpuChoosePlay(hands[i]);
+  const bestPlay = cpuPlay(hands[i], cpuDifficulty);
   const played = bestPlay.map(idx => hands[i][idx]);
   hands[i] = hands[i].filter((_, idx) => !bestPlay.includes(idx));
 
+  // 補充先を決定（出した後の手札で評価）
   let drawnCard = null, drawFromDisc = false, drawSrcRect = deckRect;
-  if (discard && discard.length > 0) {
-    const ends = discard.length < 3 ? discard.map((c, k) => k) : [0, discard.length - 1];
-    let bestEnd = -1, bestEndVal = Infinity;
-    for (const idx of ends) {
-      const v = cardValue(discard[idx]);
-      if (v < bestEndVal) { bestEndVal = v; bestEnd = idx; }
-    }
-    if (bestEndVal <= 4) {
-      const discCardEls = discEl.querySelectorAll('.prev-group .card');
-      drawSrcRect = (discCardEls[bestEnd] || discEl).getBoundingClientRect();
-      drawnCard = discard.splice(bestEnd, 1)[0];
-      drawFromDisc = true;
-    }
+  const decision = cpuDraw(hands[i], cpuDifficulty, discard);
+  if (decision.source === 'discard' && discard && discard.length > 0) {
+    const discCardEls = discEl.querySelectorAll('.prev-group .card');
+    drawSrcRect = (discCardEls[decision.index] || discEl).getBoundingClientRect();
+    drawnCard = discard.splice(decision.index, 1)[0];
+    drawFromDisc = true;
   }
   if (!drawnCard) {
     if (deck.length === 0) reshuffleDeck();
@@ -752,6 +838,13 @@ function showStartScreen() {
     html += `<button class="choice-btn ${sel}" onclick="selectSets(${n})">${n}セット</button>`;
   }
   html += `</div>`;
+  html += `<p style="margin-top:16px;">CPUの強さを選んでください</p>`;
+  html += `<div style="display:flex;gap:10px;justify-content:center;margin-top:10px;flex-wrap:wrap;">`;
+  for (const d of [['weak', '弱い'], ['normal', '普通'], ['strong', '強い']]) {
+    const sel = d[0] === cpuDifficulty ? 'selected-choice' : '';
+    html += `<button class="choice-btn ${sel}" onclick="selectDifficulty('${d[0]}')">${d[1]}</button>`;
+  }
+  html += `</div>`;
   html += `<div style="margin-top:22px;display:flex;gap:8px;justify-content:center;">`;
   html += `<button class="btn-new" onclick="startNewGame()">ゲーム開始</button>`;
   html += `<button class="choice-btn" onclick="showTitle()">戻る</button>`;
@@ -761,6 +854,7 @@ function showStartScreen() {
 
 function selectCpuCount(n) { selectedCpuCount = n; showStartScreen(); }
 function selectSets(n) { selectedSets = n; showStartScreen(); }
+function selectDifficulty(d) { cpuDifficulty = d; showStartScreen(); }
 
 function startNewGame() {
   online = false; isHost = false; myIndex = 0;
@@ -1347,7 +1441,7 @@ function hostAutoTurn() {
   if (!isHost || phase === 'over' || seatConnected(turn)) return;
   const seat = turn;
   if (phase === 'play') {
-    const bestPlay = cpuChoosePlay(hands[seat]);
+    const bestPlay = cpuPlay(hands[seat], 'normal');
     justPlayed = bestPlay.map(idx => hands[seat][idx]);
     hands[seat] = hands[seat].filter((_, idx) => !bestPlay.includes(idx));
     phase = 'draw';
@@ -1357,11 +1451,9 @@ function hostAutoTurn() {
     return;
   }
   let card = null;
-  if (discard && discard.length > 0) {
-    const ends = discard.length < 3 ? discard.map((c, k) => k) : [0, discard.length - 1];
-    let bestEnd = -1, bestEndVal = Infinity;
-    for (const idx of ends) { const v = cardValue(discard[idx]); if (v < bestEndVal) { bestEndVal = v; bestEnd = idx; } }
-    if (bestEndVal <= 4) card = discard.splice(bestEnd, 1)[0];
+  const decision = cpuDraw(hands[seat], 'normal', discard);
+  if (decision.source === 'discard' && discard && discard.length > 0) {
+    card = discard.splice(decision.index, 1)[0];
   }
   if (!card) { if (deck.length === 0) reshuffleDeck(); card = deck.length > 0 ? deck.pop() : null; }
   if (card) hands[seat].push(card);
