@@ -117,6 +117,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .rules li { margin: 3px 0; }
 .rules .ex { border-left: 3px solid #ffd700; padding-left: 8px; margin: 6px 0; opacity: .95; }
 .rules .note { opacity: .8; font-size: .95em; }
+.rules-nav { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 16px; }
+.rules-page { opacity: .8; font-size: .9em; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -860,69 +862,61 @@ function rulesImage() {
   return s;
 }
 
-function showRules() {
+// ルール本文をページ（ブロック）ごとに分割
+function rulesPages() {
+  const p = [];
+  // 1: 目的と点数（イラスト付き）
+  p.push(rulesImage() +
+    `<h3>ゲームの目的</h3>` +
+    `<p>手札の合計点をできるだけ低くし、<b>5点以下</b>で「ヤニブ」を宣言して相手より低くすると勝ちです。</p>` +
+    `<h3>カードの点数</h3>` +
+    `<ul><li>A＝1点、2〜10＝数字どおり</li><li>J＝11点／Q＝12点／K＝13点</li><li>ジョーカー＝0点</li></ul>`);
+  // 2: 準備と手番
+  p.push(
+    `<h3>準備</h3>` +
+    `<ul><li>ジョーカー2枚を含む54枚を使用。各プレイヤーに5枚ずつ配ります。</li><li>残りは山札。一番上を1枚めくって公開し、最初の捨札にします。</li></ul>` +
+    `<h3>手番でできること</h3>` +
+    `<p>スタートプレイヤーから時計回り。自分の番では次のどちらかを行います。</p>` +
+    `<p><b>① 通常のプレイ</b>（カードを出す→1枚補充）<br><b>② ヤニブの宣言</b></p>`);
+  // 3: 出せる組み合わせと補充
+  p.push(
+    `<h3>① 出せる組み合わせ</h3>` +
+    `<ul><li>好きなカード1枚</li><li>同じランク（数字）の2枚以上</li><li>同じマークの連番3枚以上（階段）</li></ul>` +
+    `<p class="note">連番ではジョーカーを好きな数字の代わりに使えます。ただし<b>KとAはつながりません</b>。</p>` +
+    `<h3>補充（1枚引く）</h3>` +
+    `<p>山札の一番上、または直前に場に出ていた捨札の端から1枚を取ります。3枚以上出ていたときは<b>両端のどちらか</b>だけ取れます。</p>` +
+    `<div class="ex">例）<b>2・4・ジョーカー</b>で階段を作ると、ジョーカーは3の役割で中央に並びます。相手が取れるのは<b>2・4・山札</b>のみで、中央のジョーカーは取れません。</div>`);
+  // 4: 宣言と得点
+  p.push(
+    `<h3>② ヤニブの宣言</h3>` +
+    `<p>カードを出す前に、手札の合計が<b>5点以下</b>なら宣言できます。宣言するとラウンド終了、全員が手札を公開します。</p>` +
+    `<h3>得点（ラウンドごと）</h3>` +
+    `<ul><li><b>宣言者が最小（同点を含む）＝成功</b>：最も合計点が高い人との点差を獲得し、その最高点の人が同じ点を失います。<span class="note">（同点でも宣言者の勝ち）</span></li>` +
+    `<li><b>宣言者より低い人がいた＝失敗（ヤニブ返し）</b>：宣言者は「差×20点」を失い、最も低い人が同じ点を得ます。</li></ul>`);
+  // 5: 連戦とその他
+  p.push(
+    `<h3>連戦（セット）</h3>` +
+    `<ul><li>最初にセット数（1／3／5／10）を選び、累計スコアで競います。</li><li>各ラウンドの敗者が次のラウンドの先行になります。</li><li>全セット終了後に最終順位を表示します。</li></ul>` +
+    `<h3>その他</h3>` +
+    `<ul><li>山札が尽きたら、捨札をシャッフルして山札に戻します。</li><li>手札は自動で A→2〜10→J→Q→K→ジョーカー の順に整列します。</li><li>オフラインではCPUの強さ（弱い／普通／強い）を選べます。</li></ul>`);
+  return p;
+}
+
+// ルール説明（ページ送り。範囲外はホームへ戻る）
+function showRules(page) {
+  const pages = rulesPages();
+  if (page === undefined) page = 0;
+  if (page < 0 || page >= pages.length) { showHome(); return; }
+  const last = page === pages.length - 1;
   let html = `<h2>ルール説明</h2>`;
-  html += rulesImage();
-  html += `<div class="rules">`;
-
-  html += `<h3>ゲームの目的</h3>`;
-  html += `<p>手札の合計点をできるだけ低くし、<b>5点以下</b>で「ヤニブ」を宣言して相手より低くすると勝ちです。</p>`;
-
-  html += `<h3>カードの点数</h3>`;
-  html += `<ul>`;
-  html += `<li>A＝1点、2〜10＝数字どおり</li>`;
-  html += `<li>J＝11点／Q＝12点／K＝13点</li>`;
-  html += `<li>ジョーカー＝0点</li>`;
-  html += `</ul>`;
-
-  html += `<h3>準備</h3>`;
-  html += `<ul>`;
-  html += `<li>ジョーカー2枚を含む54枚を使用。各プレイヤーに5枚ずつ配ります。</li>`;
-  html += `<li>残りは山札。一番上を1枚めくって公開し、最初の捨札にします。</li>`;
-  html += `</ul>`;
-
-  html += `<h3>手番でできること</h3>`;
-  html += `<p>スタートプレイヤーから時計回り。自分の番では次のどちらかを行います。</p>`;
-  html += `<p><b>① 通常のプレイ</b>（カードを出す→1枚補充）<br><b>② ヤニブの宣言</b></p>`;
-
-  html += `<h3>① 出せる組み合わせ</h3>`;
-  html += `<ul>`;
-  html += `<li>好きなカード1枚</li>`;
-  html += `<li>同じランク（数字）の2枚以上</li>`;
-  html += `<li>同じマークの連番3枚以上（階段）</li>`;
-  html += `</ul>`;
-  html += `<p class="note">連番ではジョーカーを好きな数字の代わりに使えます。ただし<b>KとAはつながりません</b>。</p>`;
-
-  html += `<h3>補充（1枚引く）</h3>`;
-  html += `<p>山札の一番上、または直前に場に出ていた捨札の端から1枚を取ります。3枚以上出ていたときは<b>両端のどちらか</b>だけ取れます。</p>`;
-  html += `<div class="ex">例）<b>2・4・ジョーカー</b>で階段を作ると、ジョーカーは3の役割で中央に並びます。相手が取れるのは<b>2・4・山札</b>のみで、中央のジョーカーは取れません。</div>`;
-
-  html += `<h3>② ヤニブの宣言</h3>`;
-  html += `<p>カードを出す前に、手札の合計が<b>5点以下</b>なら宣言できます。宣言するとラウンド終了、全員が手札を公開します。</p>`;
-
-  html += `<h3>得点（ラウンドごと）</h3>`;
-  html += `<ul>`;
-  html += `<li><b>宣言者が最小（同点を含む）＝成功</b>：最も合計点が高い人との点差を獲得し、その最高点の人が同じ点を失います。<span class="note">（同点でも宣言者の勝ち）</span></li>`;
-  html += `<li><b>宣言者より低い人がいた＝失敗（ヤニブ返し）</b>：宣言者は「差×20点」を失い、最も低い人が同じ点を得ます。</li>`;
-  html += `</ul>`;
-
-  html += `<h3>連戦（セット）</h3>`;
-  html += `<ul>`;
-  html += `<li>最初にセット数（1／3／5／10）を選び、累計スコアで競います。</li>`;
-  html += `<li>各ラウンドの敗者が次のラウンドの先行になります。</li>`;
-  html += `<li>全セット終了後に最終順位を表示します。</li>`;
-  html += `</ul>`;
-
-  html += `<h3>その他</h3>`;
-  html += `<ul>`;
-  html += `<li>山札が尽きたら、捨札をシャッフルして山札に戻します。</li>`;
-  html += `<li>手札は自動で A→2〜10→J→Q→K→ジョーカー の順に整列します。</li>`;
-  html += `<li>オフラインではCPUの強さ（弱い／普通／強い）を選べます。</li>`;
-  html += `</ul>`;
-
+  html += `<div class="rules">` + pages[page] + `</div>`;
+  html += `<div class="rules-nav">`;
+  html += `<button class="btn-new" onclick="showRules(${page - 1})">◀ 戻る</button>`;
+  html += `<span class="rules-page">${page + 1} / ${pages.length}</span>`;
+  html += `<button class="btn-new" onclick="showRules(${page + 1})">${last ? 'とじる' : '次へ ▶'}</button>`;
   html += `</div>`;
-  html += `<button class="btn-new" onclick="showHome()">戻る</button>`;
   showModal(html);
+  document.getElementById('modal-content').scrollTop = 0;
 }
 
 // タイトル（ホーム画面）へ戻る
