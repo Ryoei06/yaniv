@@ -11,13 +11,13 @@ h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5
 
 #game-view { display: flex; flex-direction: column; align-items: center; width: 100%; flex: 1; }
 #home { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; padding: 20px; }
-.home-card { background: rgba(0,0,0,.28); border-radius: 18px; padding: 40px 44px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.35); max-width: 90vw; }
+.home-card { background: transparent; border-radius: 18px; padding: 40px 44px; text-align: center; max-width: 90vw; }
 .home-title { font-size: 3.2em; font-weight: 800; letter-spacing: 4px; text-shadow: 2px 3px 6px rgba(0,0,0,.5); }
 .home-sub { opacity: 0.8; margin: 6px 0 28px; font-size: 1em; }
 .home-buttons { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
 .home-btn { padding: 14px 28px; font-size: 1.05em; }
-.scores { font-size: 0.8em; margin-bottom: 4px; background: rgba(0,0,0,.25); padding: 3px 14px; border-radius: 8px; }
-.info { font-size: 0.9em; margin-bottom: 6px; min-height: 1.2em; background: rgba(0,0,0,.3); padding: 4px 16px; border-radius: 8px; }
+.scores { font-size: 0.8em; margin-bottom: 4px; padding: 3px 14px; }
+.info { font-size: 0.9em; margin-bottom: 6px; min-height: 1.2em; padding: 4px 16px; }
 
 .table {
   display: grid; width: 100%; max-width: 1000px; flex: 1; gap: 6px;
@@ -36,7 +36,7 @@ h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5
 .center { grid-area: center; }
 
 .seat { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border-radius: 10px; transition: background 0.2s; }
-.seat.active { background: rgba(255,215,0,.12); box-shadow: 0 0 0 2px rgba(255,215,0,.5); }
+.seat.active { box-shadow: 0 0 0 2px rgba(255,215,0,.7); }
 .seat-label { font-size: 0.8em; opacity: 0.85; white-space: nowrap; }
 .seat.active .seat-label { color: #ffd700; opacity: 1; text-shadow: 0 0 6px rgba(255,215,0,.8); }
 
@@ -64,7 +64,7 @@ h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5
 .card.red { color: #c00; }
 .card.black { color: #222; }
 .card.joker { color: #8b00c8; }
-.card-back { background: linear-gradient(135deg, #1a3a8a, #2855b8); color: transparent; cursor: default; }
+.card-back { background: #24408a; color: transparent; cursor: default; }
 .card-back::after { content: '🂠'; font-size: 2em; color: rgba(255,255,255,.3); }
 .card-back:hover { transform: none; }
 .card .rank { font-size: 1.1em; }
