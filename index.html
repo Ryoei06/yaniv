@@ -17,6 +17,12 @@ h1 { margin: 8px 0 4px; font-size: 1.3em; text-shadow: 1px 1px 3px rgba(0,0,0,.5
 .icon-btn { font-size: 1.7em; background: transparent; padding: 2px 6px; border-radius: 8px; line-height: 1; }
 .icon-btn.sel { box-shadow: 0 0 0 3px #ffd700; }
 .prof-icon { font-size: 3.4em; line-height: 1; margin: 4px 0; }
+.rank-list { text-align: left; max-width: 360px; margin: 6px auto 0; }
+.rank-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-bottom: 1px solid rgba(255,255,255,.12); }
+.rank-no { width: 24px; text-align: center; font-weight: bold; color: #ffd700; }
+.rank-ic { font-size: 1.4em; }
+.rank-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-pt { font-weight: bold; white-space: nowrap; }
 
 #game-view { display: flex; flex-direction: column; align-items: center; width: 100%; flex: 1; }
 #home { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; padding: 20px; }
@@ -252,6 +258,13 @@ let mySeat = 0;
 let profile = { name: 'プレイヤー', icon: '🐱', totalScore: 0 };
 try { const _p = JSON.parse(localStorage.getItem('yaniv_profile') || 'null'); if (_p && typeof _p === 'object') profile = Object.assign(profile, _p); } catch (e) {}
 myName = profile.name;
+// ランキング用の端末固定ID
+let playerId = null;
+try { playerId = localStorage.getItem('yaniv_pid'); } catch (e) {}
+if (!playerId) { playerId = 'u' + Math.random().toString(36).slice(2, 12); try { localStorage.setItem('yaniv_pid', playerId); } catch (e) {} }
+let gameScored = false; // 1ゲームにつき1回だけ加算するためのフラグ
+let rankPeriod = 'day';
+let rankToken = 0;
 let roomCode = null;
 let inGame = false;     // オンラインで対局画面に入ったか
 let currentResult = null; // ホストが配信する結果HTML
@@ -865,9 +878,65 @@ function setNav(name) {
   document.querySelectorAll('#topnav .nav-item').forEach(b => b.classList.toggle('active', b.dataset.nav === name));
 }
 function navHome() { showTitle(); }
-function navRanking() {
-  setNav('ranking');
-  showModal(`<h2>ランキング</h2><p>準備中です。</p><button class="btn-new" onclick="showHome()">戻る</button>`);
+
+// ===== スコア記録＆ランキング（Firebaseで共有） =====
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function scoresRef() {
+  try {
+    if (typeof firebase === 'undefined') return null;
+    if (!db) { if (!firebase.apps.length) firebase.initializeApp(firebaseConfig); db = firebase.database(); }
+    return db.ref('scores');
+  } catch (e) { return null; }
+}
+// ゲーム終了時に自分のスコアを総得点へ加算し、ランキングへ記録（1ゲーム1回）
+function recordGameResult(myScore) {
+  if (gameScored) return;
+  gameScored = true;
+  const pts = myScore || 0;
+  profile.totalScore += pts;
+  try { localStorage.setItem('yaniv_profile', JSON.stringify(profile)); } catch (e) {}
+  const ref = scoresRef();
+  if (ref) { try { ref.push({ pid: playerId, name: profile.name, icon: profile.icon, score: pts, ts: Date.now() }); } catch (e) {} }
+}
+
+function navRanking() { setNav('ranking'); rankPeriod = 'day'; renderRanking(); }
+function selectRankPeriod(p) { rankPeriod = p; renderRanking(); }
+function setRankBody(html) { const el = document.getElementById('rankBody'); if (el) el.innerHTML = html; }
+
+function renderRanking() {
+  const periods = [['day', '日間'], ['week', '週間'], ['month', '月間']];
+  const token = ++rankToken;
+  let html = `<h2>ランキング</h2>`;
+  html += `<div style="display:flex;gap:8px;justify-content:center;margin-bottom:4px;">`;
+  html += periods.map(p => `<button class="choice-btn ${p[0] === rankPeriod ? 'selected-choice' : ''}" onclick="selectRankPeriod('${p[0]}')">${p[1]}</button>`).join('');
+  html += `</div>`;
+  html += `<p class="note" style="font-size:.78em;">${rankPeriod === 'day' ? '過去24時間' : rankPeriod === 'week' ? '過去7日間' : '過去30日間'}の獲得点数合計</p>`;
+  html += `<div id="rankBody"><p class="note">読み込み中…</p></div>`;
+  html += `<div style="margin-top:14px;"><button class="btn-new" onclick="showHome()">戻る</button></div>`;
+  showModal(html);
+
+  const ref = scoresRef();
+  if (!ref) { setRankBody(`<p class="note">ランキングを読み込めませんでした（ネット接続を確認してください）。</p>`); return; }
+  const spanMs = rankPeriod === 'week' ? 7 * 864e5 : rankPeriod === 'month' ? 30 * 864e5 : 864e5;
+  ref.orderByChild('ts').startAt(Date.now() - spanMs).once('value').then(snap => {
+    if (token !== rankToken) return;
+    const agg = {};
+    snap.forEach(ch => {
+      const v = ch.val();
+      if (!v || !v.pid) return;
+      const a = agg[v.pid] || (agg[v.pid] = { name: v.name, icon: v.icon, total: 0, ts: 0 });
+      a.total += (v.score || 0);
+      if ((v.ts || 0) >= a.ts) { a.ts = v.ts || 0; a.name = v.name; a.icon = v.icon; }
+    });
+    const list = Object.values(agg).sort((a, b) => b.total - a.total).slice(0, 10);
+    let body;
+    if (!list.length) body = `<p class="note">まだ記録がありません。<br>ゲームを最後まで遊ぶと記録されます。</p>`;
+    else body = `<div class="rank-list">` + list.map((r, i) =>
+      `<div class="rank-row"><span class="rank-no">${i + 1}</span><span class="rank-ic">${escapeHtml(r.icon || '🙂')}</span><span class="rank-name">${escapeHtml(r.name || '名無し')}</span><span class="rank-pt">${r.total}点</span></div>`).join('') + `</div>`;
+    setRankBody(body);
+  }).catch(() => { if (token === rankToken) setRankBody(`<p class="note">読み込みに失敗しました。</p>`); });
 }
 const PROFILE_ICONS = ['🐱', '🐶', '🦊', '🐼', '🐸', '🐵', '🦁', '🐯', '🐨', '🐧', '🐰', '🐻', '🐷', '🐹', '🦄', '🐢'];
 
@@ -1174,6 +1243,7 @@ function showGraph() {
 
 function endGame() {
   phase = 'over';
+  recordGameResult(scores[0]); // あなたの最終スコアを総得点に加算＆記録
   let html = `<h2>ゲーム終了（全${targetSets}セット）</h2>`;
   const order = NAMES.map((n, i) => ({ n, s: scores[i] })).sort((a, b) => b.s - a.s);
   html += `<div class="result-detail">`;
@@ -1194,6 +1264,7 @@ function startGame(numCpus) {
   seatOf = [0].concat(CPU_SEAT_LAYOUT[currentNumCpus]);
   NAMES = seatOf.map(s => SEAT_NAMES[s]);
   showBoard();
+  if (numCpus) gameScored = false; // 新規ゲーム開始時のみリセット（ラウンド継続では維持）
 
   deck = createDeck();
   shuffle(deck);
@@ -1487,6 +1558,9 @@ function commitState(g) {
   clearTimeout(busyTimer);
   selectedIndices.clear();
   firstStateApplied = true;
+
+  if (g.final) recordGameResult(scores[myIndex]); // オンライン最終結果：自分のスコアを加算＆記録
+  else gameScored = false;
 
   if (g.result) {
     showResultModal(g.result, !!g.final);
